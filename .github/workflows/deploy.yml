@@ -87,7 +87,7 @@ jobs:
             --region ${{ env.REGION }} \
             --platform managed \
             --allow-unauthenticated \
-            --set-secrets "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,NEXT_PUBLIC_GATEWAY_URL=GATEWAY_URL:latest,NEXT_PUBLIC_SUPABASE_URL=SUPABASE_URL:latest,NEXT_PUBLIC_SUPABASE_ANON_KEY=SUPABASE_ANON_KEY:latest"
+            --set-secrets "NEXT_PUBLIC_GATEWAY_URL=GATEWAY_URL:latest,NEXT_PUBLIC_SUPABASE_URL=SUPABASE_URL:latest,NEXT_PUBLIC_SUPABASE_ANON_KEY=SUPABASE_ANON_KEY:latest"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # API GATEWAY — Node.js/Express + Socket.IO + BullMQ → Cloud Run
