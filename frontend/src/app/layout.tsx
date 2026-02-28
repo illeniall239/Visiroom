@@ -25,9 +25,6 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <head>
-        <script src="https://js.puter.com/v2/"></script>
-      </head>
       <body
         className={`${inter.variable} ${syne.variable} font-sans antialiased bg-[var(--background)] text-[var(--foreground)] selection:bg-[var(--accent)] selection:text-[var(--foreground)]`}
       >
