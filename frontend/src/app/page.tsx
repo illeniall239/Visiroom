@@ -180,7 +180,7 @@ export default function Home() {
           .from('generations')
           .select('status, generated_image_url')
           .eq('id', generationId)
-          .single();
+          .single() as { data: { status: string; generated_image_url: string | null } | null; error: unknown };
 
         if (row?.status === 'completed' && row.generated_image_url) {
           if (pollInterval) clearInterval(pollInterval);
