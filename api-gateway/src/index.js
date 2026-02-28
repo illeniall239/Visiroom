@@ -16,6 +16,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
+app.set('trust proxy', 1); // Cloud Run sits behind Google's load balancer
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
