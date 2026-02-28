@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(npm install:*)",
+      "Bash(npm test:*)",
+      "Bash(gcloud projects:*)",
+      "Bash(gcloud config:*)",
+      "Bash(gcloud services:*)",
+      "Bash(gcloud billing:*)",
+      "Bash(gcloud artifacts:*)",
+      "Bash(gcloud secrets:*)",
+      "Bash(gcloud iam:*)",
+      "Bash(gh:*)",
+      "Bash(winget:*)"
+    ]
+  }
+}

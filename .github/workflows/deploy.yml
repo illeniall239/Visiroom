@@ -1,0 +1,162 @@
+name: Build and Deploy to GCP
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: us-central1
+  AR_REPO: visiroom
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # TEST — Run all unit + integration tests before any deploy.
+  # A failing test blocks the three deploy jobs below.
+  # ─────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            api-gateway/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install api-gateway dependencies
+        run: npm ci
+        working-directory: ./api-gateway
+
+      - name: Run api-gateway tests (Jest)
+        run: npm test
+        working-directory: ./api-gateway
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: ./frontend
+
+      - name: Run frontend tests (Vitest)
+        run: npm test
+        working-directory: ./frontend
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # FRONTEND — Next.js → Cloud Run
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Keyless auth: GitHub Actions authenticates to GCP via Workload Identity
+      # Federation (WIF). No service account JSON key is stored in GitHub secrets.
+      # WIF issues a short-lived OIDC token valid only for this specific repo/branch.
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      # Tag the image with the git commit SHA for full traceability.
+      # Every image in Artifact Registry maps to an exact git commit — you can
+      # always roll back to any previous version by deploying a specific SHA tag.
+      - name: Build and push frontend image
+        run: |
+          IMAGE=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/frontend:${{ github.sha }}
+          docker build -t $IMAGE ./frontend
+          docker push $IMAGE
+
+      - name: Deploy frontend to Cloud Run
+        run: |
+          gcloud run deploy visiroom-frontend \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/frontend:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-secrets "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,NEXT_PUBLIC_GATEWAY_URL=GATEWAY_URL:latest,NEXT_PUBLIC_SUPABASE_URL=SUPABASE_URL:latest,NEXT_PUBLIC_SUPABASE_ANON_KEY=SUPABASE_ANON_KEY:latest"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # API GATEWAY — Node.js/Express + Socket.IO + BullMQ → Cloud Run
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy-gateway:
+    name: Deploy API Gateway
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push gateway image
+        run: |
+          IMAGE=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/api-gateway:${{ github.sha }}
+          docker build -t $IMAGE ./api-gateway
+          docker push $IMAGE
+
+      - name: Deploy gateway to Cloud Run
+        run: |
+          gcloud run deploy visiroom-gateway \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/api-gateway:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-secrets "SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_ANON_KEY=SUPABASE_ANON_KEY:latest,REDIS_URL=REDIS_URL:latest,GOOGLE_AI_STUDIO_API_KEY=GOOGLE_AI_KEY:latest,CORS_ORIGIN=FRONTEND_URL:latest"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CV SERVICE — Python FastAPI → Cloud Run
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy-cv-service:
+    name: Deploy CV Service
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push cv-service image
+        run: |
+          IMAGE=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/cv-service:${{ github.sha }}
+          docker build -t $IMAGE ./cv-service
+          docker push $IMAGE
+
+      - name: Deploy cv-service to Cloud Run
+        run: |
+          gcloud run deploy visiroom-cv-service \
+            --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/cv-service:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --no-allow-unauthenticated

@@ -1,0 +1,1140 @@
+SOFTWARE REQUIREMENTS SPECIFICATION (SRS)
+
+Visual Commerce: AI-Powered "See It In My Room" Experience
+Version 1.0
+Date: February 26, 2026
+Author: Portfolio Project
+Status: Draft for Review
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1. Introduction
+   1.1 Purpose
+   1.2 Scope
+   1.3 Definitions, Acronyms, and Abbreviations
+   1.4 References
+   1.5 Overview
+
+2. Overall Description
+   2.1 Product Perspective
+   2.2 Product Functions
+   2.3 User Classes and Characteristics
+   2.4 Operating Environment
+   2.5 Design and Implementation Constraints
+   2.6 Assumptions and Dependencies
+
+3. Specific Requirements
+   3.1 Functional Requirements
+   3.2 Non-Functional Requirements
+   3.3 External Interface Requirements
+
+4. System Design Concepts Coverage
+   4.1 Architectural Patterns Applied
+   4.2 Data Flow and Processing
+   4.3 Scalability and Performance Strategies
+   4.4 Reliability and Fault Tolerance
+   4.5 Security and Privacy Design
+   4.6 Cost Optimization Architecture
+
+5. Appendices
+   5.1 Data Dictionary
+   5.2 Analysis Models
+   5.3 Issues List
+
+================================================================================
+1. INTRODUCTION
+================================================================================
+
+1.1 Purpose
+-----------
+This document specifies the requirements for "VisualCommerce AI," a system that
+enables e-commerce shoppers to visualize products within their own physical
+spaces using AI-generated imagery. The system accepts user-uploaded room
+photographs, analyzes scene context, and generates photorealistic renderings of
+selected products placed within those environments.
+
+1.2 Scope
+---------
+The system shall provide:
+- Web-based interface for image upload and visualization
+- Real-time scene analysis (depth estimation, surface detection, lighting)
+- AI-powered image generation using Nano Banana/Gemini Flash Image
+- Progress tracking and result delivery
+- Rate limiting and cost protection mechanisms
+- Privacy-preserving data handling
+
+The system shall NOT provide:
+- Mobile native applications (web-only MVP)
+- Augmented reality real-time overlay
+- 3D model manipulation or rotation
+- Persistent storage of user room photos without explicit consent
+
+1.3 Definitions, Acronyms, and Abbreviations
+--------------------------------------------
+AI      Artificial Intelligence
+API     Application Programming Interface
+CDN     Content Delivery Network
+CV      Computer Vision
+GDPR    General Data Protection Regulation
+HDR     High Dynamic Range
+MVP     Minimum Viable Product
+RAG     Retrieval-Augmented Generation
+SAM     Segment Anything Model
+SRS     Software Requirements Specification
+TTL     Time To Live
+UX      User Experience
+WebSocket Persistent full-duplex communication protocol
+
+1.4 References
+--------------
+[1] Nano Banana API Documentation, Google AI/Fal.ai
+[2] MiDaS Depth Estimation Model Documentation
+[3] Segment Anything Model (SAM) Research Paper
+[4] GDPR Article 17 (Right to Erasure)
+[5] AWS S3 Presigned URL Documentation
+
+1.5 Overview
+------------
+Section 2 describes the product context and constraints. Section 3 details
+functional and non-functional requirements. Section 4 maps implemented system
+design concepts to architectural decisions. Sections 5 contains supporting
+materials.
+
+================================================================================
+2. OVERALL DESCRIPTION
+================================================================================
+
+2.1 Product Perspective
+-----------------------
+The system operates as a standalone microservice within a larger e-commerce
+ecosystem. It integrates with:
+- Product Catalog Service (read-only, product metadata)
+- User Authentication Service (optional, JWT validation)
+- Payment/Credit System (future extension)
+- Analytics Platform (generation metrics, conversion tracking)
+
+2.2 Product Functions
+---------------------
+Major functions categorized by user action:
+
+Image Ingestion:
+- FU-1: Accept image uploads (JPEG, PNG, WebP, max 10MB)
+- FU-2: Validate image content (must contain room/interior scene)
+- FU-3: Generate presigned S3 URLs for direct browser upload
+
+Scene Analysis:
+- FU-4: Estimate depth map from 2D image
+- FU-5: Segment surfaces (walls, floors, furniture, empty spaces)
+- FU-6: Extract lighting parameters (direction, color temperature, intensity)
+- FU-7: Detect room type and style characteristics
+
+Generation Pipeline:
+- FU-8: Construct contextual prompts from product data + scene analysis
+- FU-9: Queue generation jobs with priority routing
+- FU-10: Execute Nano Banana API calls with retry logic
+- FU-11: Post-process outputs (format conversion, quality optimization)
+- FU-12: Deliver results via CDN with time-limited access
+
+User Experience:
+- FU-13: Provide real-time progress updates via WebSocket
+- FU-14: Support "regenerate with variations" (lighting, placement, style)
+- FU-15: Enable user placement adjustment (tap-to-move)
+- FU-16: Collect explicit user feedback (thumbs up/down)
+
+2.3 User Classes and Characteristics
+------------------------------------
+
+Anonymous Browsers:
+- No account required
+- Limited to 3 generations per 24-hour period (IP-based tracking)
+- No room photo retention
+- Primary goal: Reduce purchase hesitation
+
+Registered Shoppers:
+- Account-based tracking
+- 10 free generations monthly, purchase additional credits
+- Option to save room photos for future use (opt-in)
+- Access to generation history
+- Primary goal: Confident purchase decisions
+
+E-commerce Administrators:
+- System monitoring dashboard
+- Cost and usage analytics
+- Content moderation tools
+- Rate limit configuration
+- Primary goal: ROI monitoring and abuse prevention
+
+2.4 Operating Environment
+-------------------------
+Client-Side:
+- Modern web browsers (Chrome 90+, Firefox 88+, Safari 14+, Edge 90+)
+- Minimum 2Mbps internet connection
+- WebSocket support required
+
+Server-Side:
+- Cloud infrastructure (AWS/GCP/Azure)
+- Container orchestration (Docker, Kubernetes/Railway)
+- Python 3.11+ for ML services
+- Node.js 18+ for API Gateway and WebSocket handlers
+- Redis 7+ for caching and queues
+- PostgreSQL 15+ for persistent data
+
+External Services:
+- Nano Banana API (via Fal.ai or Google AI Studio)
+- S3-compatible object storage
+- CDN (CloudFront/Cloudflare)
+
+2.5 Design and Implementation Constraints
+-----------------------------------------
+- Nano Banana API rate limits: 60 requests/minute (free tier)
+- Maximum generation latency: 5 seconds (95th percentile)
+- User photo storage: Maximum 24 hours without explicit consent
+- Budget constraint: <$0.10 per generation (target: $0.03)
+- Browser compatibility: No WebGL requirements (accessibility)
+
+2.6 Assumptions and Dependencies
+--------------------------------
+- Users possess smartphones with functional cameras
+- Nano Banana API maintains <3s generation latency
+- Product catalog provides sufficient metadata (dimensions, materials, style)
+- Sufficient training data available for room/scene validation classifier
+- Users accept 5-second wait time for generation results
+
+================================================================================
+3. SPECIFIC REQUIREMENTS
+================================================================================
+
+================================================================================
+3.1 FUNCTIONAL REQUIREMENTS
+================================================================================
+
+-------------------------------------------------------------------------------
+3.1.1 IMAGE UPLOAD AND VALIDATION
+-------------------------------------------------------------------------------
+
+FR-1.0 Image Upload Interface
+    Priority: High
+    Description: The system shall provide a drag-and-drop or click-to-upload
+    interface supporting JPEG, PNG, and WebP formats.
+    
+    FR-1.1 Maximum file size shall be 10MB; larger files rejected with
+          user-friendly error message.
+    
+    FR-1.2 System shall generate presigned S3 URLs to enable direct browser
+          upload, bypassing application servers for bandwidth efficiency.
+    
+    FR-1.3 Upload progress shall be visually indicated (0-100%).
+
+FR-2.0 Content Validation
+    Priority: High
+    Description: The system shall validate that uploaded images contain
+    interior/room scenes and reject inappropriate content.
+    
+    FR-2.1 Images shall be classified using a pre-trained model (e.g., 
+          CLIP-based classifier) to detect room vs. non-room content.
+    
+    FR-2.2 Rejection categories: selfies, outdoor scenes, text documents,
+          explicit content, non-photographic images.
+    
+    FR-2.3 Validation latency shall not exceed 500ms; failures queued for
+          async re-validation if model uncertain.
+
+FR-3.0 Placement Interaction
+    Priority: Medium
+    Description: Users shall specify product placement location.
+    
+    FR-3.1 Default mode: User taps/click on image to place product anchor.
+    
+    FR-3.2 Advanced mode (v2): System suggests placement regions based on
+          surface detection; user selects from suggestions.
+    
+    FR-3.3 Placement coordinates (x, y) normalized to 0.0-1.0 range,
+          stored with generation request.
+
+-------------------------------------------------------------------------------
+3.1.2 SCENE ANALYSIS AND UNDERSTANDING
+-------------------------------------------------------------------------------
+
+FR-4.0 Depth Estimation
+    Priority: High
+    Description: System shall generate depth maps from 2D room photographs.
+    
+    FR-4.1 Implementation using MiDaS or Depth Anything v2 model.
+    
+    FR-4.2 Output: 256x256 depth map, normalized 0.0 (far) to 1.0 (near).
+    
+    FR-4.3 Processing latency: <800ms on GPU-enabled instance.
+
+FR-5.0 Surface Segmentation
+    Priority: High
+    Description: System shall identify and segment distinct surfaces.
+    
+    FR-5.1 Using Segment Anything Model (SAM) with custom prompts for
+          furniture, walls, floors, ceilings, empty spaces.
+    
+    FR-5.2 Output: JSON array of segments with class labels, bounding boxes,
+          and mask URLs.
+    
+    FR-5.3 Confidence threshold: 0.75; low-confidence segments flagged for
+          manual review or excluded from generation context.
+
+FR-6.0 Lighting Analysis
+    Priority: Medium
+    Description: System shall estimate environmental lighting parameters.
+    
+    FR-6.1 Extract dominant light direction (8 cardinal directions + overhead).
+    
+    FR-6.2 Estimate color temperature (warm 2700K to cool 6500K).
+    
+    FR-6.3 Detect lighting quality (soft diffused vs. hard direct).
+    
+    FR-6.4 Output used to guide Nano Banana prompt engineering for
+          lighting-consistent generation.
+
+FR-7.0 Room Classification
+    Priority: Low
+    Description: System shall classify room type and style.
+    
+    FR-7.1 Room types: living room, bedroom, kitchen, bathroom, office,
+          dining room, other.
+    
+    FR-7.2 Style detection: modern, traditional, minimalist, bohemian,
+          industrial, Scandinavian, unknown.
+    
+    FR-7.3 Classification confidence stored for analytics; low confidence
+          defaults to "neutral contemporary" in prompts.
+
+-------------------------------------------------------------------------------
+3.1.3 GENERATION PIPELINE
+-------------------------------------------------------------------------------
+
+FR-8.0 Prompt Engineering
+    Priority: High
+    Description: System shall construct optimized prompts for Nano Banana.
+    
+    FR-8.1 Prompt template structure:
+          [Product description] + [Placement context] + [Lighting specification]
+          + [Style coherence] + [Quality modifiers]
+    
+    FR-8.2 Product description derived from catalog: name, materials, colors,
+          dimensions translated to natural language.
+    
+    FR-8.3 Placement context: "placed on [surface type] at [depth] distance"
+          using depth map data.
+    
+    FR-8.4 Lighting specification: "[directional] [temperature] lighting,
+          [soft/hard] shadows" from lighting analysis.
+    
+    FR-8.5 Negative prompts automatically appended: "blurry, low quality,
+          distorted, cartoon, illustration, painting."
+
+FR-9.0 Job Queue Management
+    Priority: High
+    Description: Generation requests shall be managed via priority queue.
+    
+    FR-9.1 Queue implementation: Redis-backed BullMQ (Node.js) or Celery
+          (Python) with visibility timeout.
+    
+    FR-9.2 Priority levels:
+          1. Paid users (highest)
+          2. Registered free users
+          3. Anonymous users (lowest)
+    
+    FR-9.3 Job TTL: 30 seconds; exceeded jobs marked failed, user notified.
+    
+    FR-9.4 Dead letter queue for failed jobs with automatic retry (max 3).
+
+FR-10.0 AI Generation Execution
+    Priority: High
+    Description: System shall execute Nano Banana API calls.
+    
+    FR-10.1 API provider abstraction layer supporting Fal.ai, Kie.ai, or
+           direct Google AI Studio integration.
+    
+    FR-10.2 Request payload: constructed prompt, aspect ratio matching
+           input image, quality setting (balanced speed/quality).
+    
+    FR-10.3 Timeout handling: 5-second client timeout with graceful
+           degradation to "try again" message.
+    
+    FR-10.4 Response validation: Check for generation artifacts (blur,
+           distortion) using Laplacian variance; flag low-quality for retry.
+
+FR-11.0 Post-Processing
+    Priority: Medium
+    Description: Generated images shall be optimized for delivery.
+    
+    FR-11.1 Format conversion: PNG source to WebP for delivery (30% size
+           reduction).
+    
+    FR-11.2 Resolution variants: 1024x1024 (display), 512x512 (thumbnail).
+    
+    FR-11.3 Optional watermark: "AI Visualization" subtle overlay for
+           transparency (configurable per tenant).
+
+FR-12.0 Result Delivery
+    Priority: High
+    Description: Generated images delivered securely to users.
+    
+    FR-12.1 CDN upload with 24-hour signed URL expiry.
+    
+    FR-12.2 Direct URL not exposed; proxied through application for
+           access control validation.
+    
+    FR-12.3 WebSocket notification upon completion with result metadata.
+
+-------------------------------------------------------------------------------
+3.1.4 USER EXPERIENCE AND FEEDBACK
+-------------------------------------------------------------------------------
+
+FR-13.0 Real-Time Progress
+    Priority: High
+    Description: Users receive live updates during generation.
+    
+    FR-13.1 WebSocket connection established on upload completion.
+    
+    FR-13.2 Progress stages: "Uploading" → "Analyzing your space" → 
+           "Placing product" → "Generating visualization" → "Finalizing"
+    
+    FR-13.3 Each stage includes estimated time remaining and contextual
+           explanation (educational, reduces perceived wait).
+    
+    FR-13.4 Connection resilience: Auto-reconnect with exponential backoff,
+           state recovery via session ID.
+
+FR-14.0 Variation Generation
+    Priority: Medium
+    Description: Users request alternative visualizations.
+    
+    FR-14.1 Variation types: different lighting (morning/afternoon/evening),
+           different placement (shift left/right), different styling
+           (minimalist/cozy/luxurious).
+    
+    FR-14.2 Variations use cached scene analysis to skip depth/segmentation,
+           reducing latency to ~2 seconds.
+    
+    FR-14.3 Side-by-side comparison view for up to 4 variations.
+
+FR-15.0 Feedback Collection
+    Priority: Medium
+    Description: System captures explicit user feedback.
+    
+    FR-15.1 Thumbs up/down buttons on result display.
+    
+    FR-15.2 Optional text feedback: "What would make this better?"
+    
+    FR-15.3 Feedback stored with generation metadata for model improvement
+           and prompt engineering refinement.
+
+FR-16.0 History and Persistence
+    Priority: Low
+    Description: Registered users access past generations.
+    
+    FR-16.1 Generation history list: thumbnail, product, timestamp.
+    
+    FR-16.2 Regenerate from history using cached scene analysis (if room
+           photo still available per retention policy).
+    
+    FR-16.3 Export/share functionality: Download PNG, share URL (24hr expiry).
+
+-------------------------------------------------------------------------------
+3.1.5 ADMINISTRATION AND MONITORING
+-------------------------------------------------------------------------------
+
+FR-17.0 Rate Limiting
+    Priority: High
+    Description: System prevents API abuse and cost overruns.
+    
+    FR-17.1 Anonymous: 3 generations per 24 hours per IP (Redis sliding
+           window counter).
+    
+    FR-17.2 Registered: 10 generations per month, reset on billing cycle.
+    
+    FR-17.3 Burst protection: Max 1 generation per 10 seconds per user.
+    
+    FR-17.4 Rate limit headers returned: X-RateLimit-Remaining, 
+           X-RateLimit-Reset.
+
+FR-18.0 Cost Monitoring
+    Priority: High
+    Description: Real-time tracking of generation costs.
+    
+    FR-18.1 Per-generation cost logging: API provider, latency, success/fail.
+    
+    FR-18.2 Daily budget alerts: 80% threshold warning, 100% hard stop.
+    
+    FR-18.3 Cost attribution by user tier, product category, time of day.
+
+FR-19.0 Content Moderation
+    Priority: Medium
+    Description: Human oversight of generated content.
+    
+    FR-19.1 Queue for manual review: Flagged generations (low quality,
+           potential IP issues, inappropriate content).
+    
+    FR-19.2 Moderation dashboard: Image grid, approve/remove, user notification.
+
+================================================================================
+3.2 NON-FUNCTIONAL REQUIREMENTS
+================================================================================
+
+-------------------------------------------------------------------------------
+3.2.1 PERFORMANCE REQUIREMENTS
+-------------------------------------------------------------------------------
+
+NFR-1.0 Latency
+    Priority: Critical
+    Description: System responsiveness metrics.
+    
+    NFR-1.1 End-to-end generation time (upload to result): <5 seconds at
+           95th percentile for 1024x1024 images.
+    
+    NFR-1.2 Time to first byte (WebSocket connection): <200ms.
+    
+    NFR-1.3 Scene analysis pipeline: <1.5 seconds total (depth + segment
+           + lighting).
+    
+    NFR-1.4 API response time (health check): <50ms.
+
+NFR-2.0 Throughput
+    Priority: High
+    Description: System capacity under load.
+    
+    NFR-2.1 Concurrent generations: Support 50 simultaneous generation
+           jobs without queue timeout.
+    
+    NFR-2.2 Upload bandwidth: Handle 100 concurrent 10MB uploads
+           (1Gbps aggregate).
+    
+    NFR-2.3 WebSocket connections: Maintain 10,000 concurrent connections
+           per node.
+
+NFR-3.0 Scalability
+    Priority: High
+    Description: Growth accommodation.
+    
+    NFR-3.1 Horizontal scaling: Stateless application nodes behind load
+           balancer; auto-scale 2-20 nodes based on queue depth.
+    
+    NFR-3.2 Database: Read replicas for analytics queries; connection
+           pooling (PgBouncer).
+    
+    NFR-3.3 Cache sharding: Redis Cluster for session and rate limit data.
+
+NFR-4.0 Resource Utilization
+    Priority: Medium
+    Description: Efficient resource use.
+    
+    NFR-4.1 GPU utilization for CV models: >60% average (batch processing
+           where possible).
+    
+    NFR-4.2 Memory usage: CV service <4GB RAM per instance.
+    
+    NFR-4.3 Storage efficiency: Generated images compressed to <500KB each.
+
+-------------------------------------------------------------------------------
+3.2.2 RELIABILITY AND AVAILABILITY
+-------------------------------------------------------------------------------
+
+NFR-5.0 Availability
+    Priority: Critical
+    Description: System uptime requirements.
+    
+    NFR-5.1 Service Level Objective: 99.9% uptime (8.76 hours downtime/year).
+    
+    NFR-5.2 Scheduled maintenance: <1 hour monthly, announced 48 hours prior.
+    
+    NFR-5.3 Degradation modes:
+            - Full functionality: All components operational
+            - Degraded: CV models offline, fallback to user placement only
+            - Critical: Generation offline, queue for retry when restored
+
+NFR-6.0 Fault Tolerance
+    Priority: High
+    Description: Graceful handling of failures.
+    
+    NFR-6.1 Nano Banana API failure: Automatic retry with exponential
+           backoff (1s, 2s, 4s); failover to backup provider if configured.
+    
+    NFR-6.2 CV model failure: Skip analysis, use generic prompt, notify user
+           of "basic mode."
+    
+    NFR-6.3 Database failure: Queue jobs in Redis, resume when DB recovers.
+    
+    NFR-6.4 Partial system failure: Circuit breaker pattern to prevent
+           cascade failures (e.g., stop accepting uploads if generation
+           pipeline down).
+
+NFR-7.0 Data Durability
+    Priority: High
+    Description: Protection against data loss.
+    
+    NFR-7.1 Generation metadata: Backed up to S3 daily, 30-day retention.
+    
+    NFR-7.2 User photos: Not backed up (ephemeral by design), but generation
+           results backed up if user opts to save.
+
+NFR-8.0 Recovery
+    Priority: Medium
+    Description: Disaster recovery capabilities.
+    
+    NFR-8.1 Recovery Time Objective (RTO): 1 hour for full service.
+    
+    NFR-8.2 Recovery Point Objective (RPO): 15 minutes (last Redis snapshot).
+    
+    NFR-8.3 Automated backups: PostgreSQL daily, Redis hourly snapshots.
+
+-------------------------------------------------------------------------------
+3.2.3 SECURITY REQUIREMENTS
+-------------------------------------------------------------------------------
+
+NFR-9.0 Authentication and Authorization
+    Priority: High
+    Description: Access control mechanisms.
+    
+    NFR-9.1 JWT-based authentication for registered users.
+    
+    NFR-9.2 Anonymous users tracked via signed cookies (tamper-proof).
+    
+    NFR-9.3 API keys for admin endpoints, rotated monthly.
+    
+    NFR-9.4 Principle of least privilege: Service accounts limited to
+           specific S3 buckets, database tables.
+
+NFR-10.0 Data Protection
+    Priority: Critical
+    Description: Security of sensitive data.
+    
+    NFR-10.1 Encryption in transit: TLS 1.3 for all connections.
+    
+    NFR-10.2 Encryption at rest: AES-256 for S3, database TDE enabled.
+    
+    NFR-10.3 PII handling: Email addresses hashed in logs; no plaintext storage.
+    
+    NFR-10.4 Image content: Scanned for malware on upload (ClamAV integration).
+
+NFR-11.0 Privacy Compliance
+    Priority: Critical
+    Description: Regulatory compliance.
+    
+    NFR-11.1 GDPR Article 17: User data deletion within 30 days of request.
+    
+    NFR-11.2 GDPR Article 15: Data export capability (machine-readable format).
+    
+    NFR-11.3 Consent management: Explicit opt-in for room photo retention
+           with granular consent (analytics vs. personalization).
+    
+    NFR-11.4 Data Processing Agreement: Signed with Nano Banana provider
+           confirming no training on user data.
+
+NFR-12.0 Abuse Prevention
+    Priority: High
+    Description: Protection against malicious use.
+    
+    NFR-12.1 Input validation: Image metadata stripped (EXIF removal) to
+           prevent metadata attacks.
+    
+    NFR-12.2 Prompt injection prevention: Sanitize all user inputs before
+           inclusion in generation prompts.
+    
+    NFR-12.3 Content policy: Reject attempts to generate harmful, illegal,
+           or sexually explicit content (automated + human review).
+
+-------------------------------------------------------------------------------
+3.2.4 MAINTAINABILITY AND SUPPORTABILITY
+-------------------------------------------------------------------------------
+
+NFR-13.0 Code Quality
+    Priority: Medium
+    Description: Engineering standards.
+    
+    NFR-13.1 Test coverage: >80% unit test coverage, >60% integration.
+    
+    NFR-13.2 Documentation: API docs (OpenAPI/Swagger), architecture
+           decision records (ADRs), runbooks for on-call.
+    
+    NFR-13.3 Linting: Strict type checking (TypeScript, Python mypy).
+
+NFR-14.0 Observability
+    Priority: High
+    Description: Monitoring and debugging capabilities.
+    
+    NFR-14.1 Metrics: Prometheus for latency, throughput, error rates,
+           business metrics (generations per hour, cost per user).
+    
+    NFR-14.2 Logging: Structured JSON logs, correlation IDs across services,
+           7-day retention for debug logs.
+    
+    NFR-14.3 Tracing: OpenTelemetry for distributed tracing (upload → 
+           analysis → generation → delivery).
+    
+    NFR-14.4 Alerting: PagerDuty integration for SLO violations
+           (p95 latency >5s, error rate >1%, queue depth >100).
+
+NFR-15.0 Deployment
+    Priority: Medium
+    Description: Release management.
+    
+    NFR-15.1 CI/CD: GitHub Actions for test, build, deploy pipeline.
+    
+    NFR-15.2 Blue-green deployment: Zero-downtime releases with instant
+           rollback capability.
+    
+    NFR-15.3 Feature flags: Gradual rollout of new features (LaunchDarkly
+           or open-source equivalent).
+
+NFR-16.0 Technical Debt Management
+    Priority: Low
+    Description: Long-term code health.
+    
+    NFR-16.1 Refactoring budget: 20% of sprint capacity allocated to
+           non-feature work.
+    
+    NFR-16.2 Deprecation policy: 6-month notice for API changes.
+
+-------------------------------------------------------------------------------
+3.2.5 USABILITY AND ACCESSIBILITY
+-------------------------------------------------------------------------------
+
+NFR-17.0 User Interface
+    Priority: High
+    Description: Ease of use requirements.
+    
+    NFR-17.1 Mobile-first design: Touch-optimized for smartphone cameras.
+    
+    NFR-17.2 Progressive enhancement: Core functionality works without
+           JavaScript (file upload → server-rendered result page).
+    
+    NFR-17.3 Error messages: Plain language explanations, actionable
+           next steps (not "Error 500").
+
+NFR-18.0 Accessibility
+    Priority: Medium
+    Description: WCAG 2.1 Level AA compliance.
+    
+    NFR-18.1 Screen reader support: Alt text for generated images describing
+           scene and product placement.
+    
+    NFR-18.2 Keyboard navigation: Full functionality without mouse.
+    
+    NFR-18.3 Color contrast: 4.5:1 minimum for all text.
+    
+    NFR-18.4 Reduced motion: Respect prefers-reduced-motion for animations.
+
+NFR-19.0 Internationalization
+    Priority: Low
+    Description: Multi-language support (future).
+    
+    NFR-19.1 i18n framework: All user-facing strings externalized.
+    
+    NFR-19.2 RTL support: Layout adapts for right-to-left languages.
+
+-------------------------------------------------------------------------------
+3.2.6 BUSINESS CONTINUITY
+-------------------------------------------------------------------------------
+
+NFR-20.0 Cost Controls
+    Priority: Critical
+    Description: Financial protection.
+    
+    NFR-20.1 Hard budget cap: Daily spend limit on Nano Banana API with
+           automatic service suspension when exceeded.
+    
+    NFR-20.2 Cost per generation: Target <$0.05, alert if >$0.10 sustained.
+    
+    NFR-20.3 Usage forecasting: Alert if 7-day projection exceeds 150% of
+           previous week (viral content detection).
+
+NFR-21.0 Vendor Lock-in Mitigation
+    Priority: Medium
+    Description: Provider flexibility.
+    
+    NFR-21.1 Abstraction layer: Provider-agnostic generation interface
+           supporting Nano Banana, DALL-E, Stable Diffusion.
+    
+    NFR-21.2 Prompt versioning: Track prompt effectiveness across providers.
+    
+    NFR-21.3 Data portability: Export all generation metadata (JSON format).
+
+================================================================================
+3.3 EXTERNAL INTERFACE REQUIREMENTS
+================================================================================
+
+3.3.1 User Interfaces
+---------------------
+- Web application: Responsive React/Vue.js SPA
+- Admin dashboard: Separate React application, route-restricted
+- Mobile: Progressive Web App (PWA) with camera access
+
+3.3.2 Hardware Interfaces
+-------------------------
+- Server GPU: NVIDIA T4 or better for CV inference (AWS g4dn instances)
+- Client: Standard smartphone camera, minimum 5MP resolution
+
+3.3.3 Software Interfaces
+-------------------------
+- Nano Banana API: REST/HTTP2, JSON payloads
+- Redis: Redis protocol, TLS encryption
+- PostgreSQL: Wire protocol, SSL mode required
+- S3: AWS SDK or MinIO compatible
+
+3.3.4 Communications Interfaces
+-------------------------------
+- WebSocket: Socket.io or native WebSocket with fallback to long-polling
+- HTTP/2: For API Gateway to client communication
+- gRPC: Internal service communication (optional optimization)
+
+================================================================================
+4. SYSTEM DESIGN CONCEPTS COVERAGE
+================================================================================
+
+This section explicitly maps architectural decisions to established system
+design patterns and concepts, demonstrating applied knowledge for portfolio
+review and technical interviews.
+
+================================================================================
+4.1 ARCHITECTURAL PATTERNS APPLIED
+================================================================================
+
+-------------------------------------------------------------------------------
+Pattern: ASYNCHRONOUS JOB QUEUE (BullMQ/Celery)
+-------------------------------------------------------------------------------
+Concept: Decouple request acceptance from processing to handle variable
+         latency and provide reliability.
+
+Application:
+- Generation requests enter Redis-backed queue upon upload completion
+- Workers process jobs independently of API request lifecycle
+- WebSocket provides async notification upon completion
+
+Benefits Demonstrated:
+- Handles Nano Banana API latency (2-3s) without blocking HTTP connections
+- Enables retry logic for transient failures
+- Supports priority routing (paid > free users)
+- Scales worker instances independently of API servers
+
+Interview Talking Point:
+"I used a queue to handle the mismatch between user-facing latency requirements
+(<5s) and the reality of AI API variance. This also gives us durability—if the
+generation service restarts, jobs persist in Redis."
+
+-------------------------------------------------------------------------------
+Pattern: CIRCUIT BREAKER
+-------------------------------------------------------------------------------
+Concept: Prevent cascade failures by failing fast when downstream services
+         are unhealthy.
+
+Application:
+- Nano Banana API health monitored via periodic health checks
+- After 3 consecutive failures, circuit opens (fail-fast mode)
+- Queue processing paused, users receive "Service temporarily unavailable"
+- Half-open state tests recovery before full traffic restoration
+
+Benefits Demonstrated:
+- Protects against runaway retry storms during provider outages
+- Preserves queue integrity during partial failures
+- Graceful degradation to cached responses or "try again later"
+
+Interview Talking Point:
+"The circuit breaker protects our budget too—if Nano Banana is erroring, we
+don't want to burn credits on doomed requests."
+
+-------------------------------------------------------------------------------
+Pattern: STRANGLER FIG (Incremental Migration)
+-------------------------------------------------------------------------------
+Concept: Gradually replace legacy functionality by building new services
+         alongside old ones, then routing traffic incrementally.
+
+Application:
+- Phase 1: New AI generation runs parallel to static product images
+- Phase 2: A/B test AI vs. static (50/50 split via feature flag)
+- Phase 3: Gradual increase to 100% AI for eligible products
+- Legacy system remains as fallback for unsupported categories
+
+Benefits Demonstrated:
+- Risk mitigation for new technology adoption
+- Data-driven validation of conversion lift before full commitment
+- Rollback capability without code deployment
+
+Interview Talking Point:
+"We're strangling the old static image system—AI generation runs in parallel
+first, then we measure conversion impact before cutting over completely."
+
+-------------------------------------------------------------------------------
+Pattern: CQRS (Command Query Responsibility Segregation)
+-------------------------------------------------------------------------------
+Concept: Separate read and write models to optimize each independently.
+
+Application:
+- Writes: Upload metadata, generation requests, user feedback (PostgreSQL)
+- Reads: Generation history, analytics dashboards (read replicas + Redis cache)
+- Event sourcing: Generation lifecycle events stored for audit/replay
+
+Benefits Demonstrated:
+- Analytics queries don't impact transactional performance
+- Materialized views for complex aggregations (cost per user tier)
+- Event log enables debugging production issues via replay
+
+Interview Talking Point:
+"Analytics queries on generation history could slow down the upload pipeline,
+so I separated them—writes go to primary PostgreSQL, reads from replicas and
+materialized views."
+
+-------------------------------------------------------------------------------
+Pattern: BULKHEAD (Resource Isolation)
+-------------------------------------------------------------------------------
+Concept: Partition resources to prevent failure in one component from
+         exhausting shared resources.
+
+Application:
+- Separate Redis instances: Job queue (persistence) vs. Rate limiting (fast)
+- Separate worker pools: CV analysis vs. Generation vs. Post-processing
+- Database connection pools isolated by service tier
+
+Benefits Demonstrated:
+- Rate limit check failures don't block generation queue
+- CV model memory leaks don't impact API availability
+- Resource exhaustion in one pipeline stage contained
+
+Interview Talking Point:
+"I isolated the rate limiting Redis from the job queue—if someone hits us
+with a DDoS, the rate limiter stays responsive even if the queue is under
+heavy load."
+
+================================================================================
+4.2 DATA FLOW AND PROCESSING
+================================================================================
+
+-------------------------------------------------------------------------------
+Concept: EVENT-DRIVEN ARCHITECTURE
+-------------------------------------------------------------------------------
+Implementation:
+- Upload completion triggers SceneAnalysisEvent
+- Analysis completion triggers GenerationQueuedEvent
+- Generation completion triggers NotificationEvent
+- Events processed via Redis Pub/Sub and WebSocket broadcast
+
+Design Rationale:
+- Loose coupling between pipeline stages
+- Easy to add new consumers (analytics, moderation) without changing producers
+- Supports event replay for debugging
+
+-------------------------------------------------------------------------------
+Concept: STREAM PROCESSING (Simulated)
+-------------------------------------------------------------------------------
+Implementation:
+- User behavior events (clicks, uploads, generations) streamed to Kafka
+- Real-time aggregation: "Trending products this hour"
+- Windowed operations: "Average generation latency last 5 minutes"
+
+Design Rationale:
+- Prepares architecture for real-time personalization (Experience 2)
+- Demonstrates understanding of event streaming beyond simple queues
+- Enables reactive scaling based on demand patterns
+
+-------------------------------------------------------------------------------
+Concept: MULTI-MODAL DATA PIPELINE
+-------------------------------------------------------------------------------
+Implementation:
+- Image data: S3 object storage with CloudFront CDN
+- Metadata: PostgreSQL relational data
+- Cache: Redis for session, rate limits, job state
+- Search: Elasticsearch for generation history (future)
+
+Design Rationale:
+- Different access patterns require different storage optimizations
+- Images served via CDN (edge caching), metadata via SQL (ACID compliance)
+- Demonstrates polyglot persistence decision-making
+
+================================================================================
+4.3 SCALABILITY AND PERFORMANCE STRATEGIES
+================================================================================
+
+-------------------------------------------------------------------------------
+Technique: HORIZONTAL SCALING WITH STATELESSNESS
+-------------------------------------------------------------------------------
+Application:
+- API servers: Stateless, any request can be handled by any instance
+- Session state externalized to Redis
+- WebSocket connections: Sticky sessions or shared Redis adapter (Socket.io)
+
+Interview Angle:
+"I designed all application layers to be horizontally scalable—no instance
+holds critical state, so we can scale from 2 to 20 nodes based on queue depth."
+
+-------------------------------------------------------------------------------
+Technique: CACHING STRATEGY (Multi-Layer)
+-------------------------------------------------------------------------------
+Layers:
+1. Browser cache: Product images, static assets (immutable hashes)
+2. CDN cache: Generated images (24hr TTL, signed URLs)
+3. Application cache: Scene analysis results (1hr TTL for identical uploads)
+4. Database cache: Connection pooling, query result caching
+
+Cache Invalidation:
+- Product metadata changes: Purge application cache
+- New model version: Gradual CDN cache refresh via versioned URLs
+
+-------------------------------------------------------------------------------
+Technique: DATABASE OPTIMIZATION
+-------------------------------------------------------------------------------
+Strategies:
+- Write-heavy tables (generations): Partitioned by date (monthly)
+- Read-heavy analytics: Materialized views refreshed hourly
+- Connection pooling: PgBouncer with transaction-level pooling
+- Indexing: Composite indexes on (user_id, created_at) for history queries
+
+-------------------------------------------------------------------------------
+Technique: LATENCY OPTIMIZATION
+-------------------------------------------------------------------------------
+Specific Optimizations:
+- Presigned S3 URLs: Bypass application servers for uploads (saves bandwidth)
+- WebSocket connection reuse: Avoid HTTP handshake overhead for progress updates
+- CV model batching: Process multiple uploads together when queue depth allows
+- Image optimization: WebP conversion reduces transfer by 30%
+
+================================================================================
+4.4 RELIABILITY AND FAULT TOLERANCE
+================================================================================
+
+-------------------------------------------------------------------------------
+Concept: IDEMPOTENCY
+-------------------------------------------------------------------------------
+Implementation:
+- Generation requests include client-generated UUID
+- Duplicate UUIDs detected and rejected (prevents double-charge on retry)
+- Idempotency keys stored in Redis with 24hr TTL
+
+Scenario:
+User clicks "Generate" twice due to slow connection—system recognizes duplicate,
+returns existing job status instead of creating new chargeable request.
+
+-------------------------------------------------------------------------------
+Concept: DEAD LETTER QUEUES
+-------------------------------------------------------------------------------
+Implementation:
+- Jobs failing after 3 retries moved to dead letter queue
+- Manual inspection dashboard for failed generations
+- Automatic alert to on-call engineer for DLQ depth > 10
+
+Recovery:
+- Replay capability: Re-queue with fixed parameters or refund credit
+
+-------------------------------------------------------------------------------
+Concept: GRACEFUL DEGRADATION
+-------------------------------------------------------------------------------
+Fallback Chain:
+1. Full experience: CV analysis + Nano Banana generation
+2. Degraded: User placement only + generic lighting prompt
+3. Critical: Static product image with "visualize coming soon" message
+4. Failure: Apology message with email notification when service restored
+
+-------------------------------------------------------------------------------
+Concept: HEALTH CHECKS AND OBSERVABILITY
+-------------------------------------------------------------------------------
+Implementation:
+- Liveness probe: HTTP 200 if process running
+- Readiness probe: Database and Redis connectivity check
+- Deep health: End-to-end generation test with synthetic data
+- Distributed tracing: OpenTelemetry spans across upload → analysis → generation
+
+================================================================================
+4.5 SECURITY AND PRIVACY DESIGN
+================================================================================
+
+-------------------------------------------------------------------------------
+Concept: DEFENSE IN DEPTH
+-------------------------------------------------------------------------------
+Layers:
+1. Network: VPC isolation, security groups, WAF for DDoS protection
+2. Application: Input validation, rate limiting, authentication
+3. Data: Encryption at rest and in transit, minimal PII collection
+4. Access: IAM roles with least privilege, no long-lived credentials
+
+-------------------------------------------------------------------------------
+Concept: PRIVACY BY DESIGN (GDPR Compliance)
+-------------------------------------------------------------------------------
+Implementation:
+- Data minimization: Only collect necessary metadata
+- Purpose limitation: Separate consent for analytics vs. generation
+- Storage limitation: Automatic TTL on user photos (24hr default)
+- Data portability: Export user data as JSON via API
+
+Technical Measures:
+- EXIF stripping on upload (removes GPS, camera metadata)
+- Automated PII detection in logs (credit card patterns, emails)
+- Audit logging: Who accessed what user data when
+
+-------------------------------------------------------------------------------
+Concept: SECRET MANAGEMENT
+-------------------------------------------------------------------------------
+Implementation:
+- API keys: AWS Secrets Manager or HashiCorp Vault
+- Rotation: Automatic monthly rotation for Nano Banana keys
+- Injection: Runtime environment variables, never committed to code
+- Leak detection: Git pre-commit hooks for credential scanning
+
+================================================================================
+4.6 COST OPTIMIZATION ARCHITECTURE
+================================================================================
+
+-------------------------------------------------------------------------------
+Strategy: TIERED MODEL USAGE
+-------------------------------------------------------------------------------
+Implementation:
+- Default: Nano Banana Flash (fast, cheap, good quality)
+- Upgrade trigger: User requests "highest quality" or product is high-value
+- Fallback: Stable Diffusion on Replicate if Nano Banana unavailable
+
+Cost Tracking:
+- Per-generation cost attribution by user, product category, time of day
+- Alerting when cost per generation exceeds $0.10 (investigate prompt bloat)
+
+-------------------------------------------------------------------------------
+Strategy: INTELLIGENT CACHING
+-------------------------------------------------------------------------------
+Implementation:
+- Scene analysis cache: Same room photo → skip CV processing (saves 800ms + cost)
+- Generation result cache: Identical product + placement + prompt → return cached
+- Cache key: Hash of (product_id, scene_features, prompt_parameters)
+
+Invalidation:
+- Product metadata changes invalidate related cache entries
+- Model version updates trigger gradual cache refresh
+
+-------------------------------------------------------------------------------
+Strategy: DEMAND MANAGEMENT
+-------------------------------------------------------------------------------
+Implementation:
+- Queue prioritization: Free users processed during off-peak hours
+- Rate limiting: Prevents burst traffic from spiking costs
+- Budget circuit breaker: Hard stop when daily spend exceeded
+
+Business Logic:
+- "Try again later" messaging during high-demand periods
+- Encourages conversion to paid tier for priority processing
+
+================================================================================
+5. APPENDICES
+================================================================================
+
+5.1 Data Dictionary
+-------------------
+[Detailed field definitions for all database schemas]
+
+5.2 Analysis Models
+-------------------
+[UML diagrams, sequence diagrams, state machines - to be added]
+
+5.3 Issues List
+--------------
+[Known open questions and risks]
+- TBD: Exact Nano Banana provider (Fal.ai vs. direct Google)
+- TBD: CV model hosting (self-hosted vs. AWS SageMaker)
+- Risk: Nano Banana API pricing changes could impact unit economics
+- Risk: User adoption of "tap-to-place" vs. expecting full automation
+
+================================================================================
+END OF DOCUMENT
+================================================================================

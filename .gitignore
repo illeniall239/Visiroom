@@ -1,0 +1,23 @@
+# Environment secrets — NEVER commit these
+api-gateway/.env
+api-gateway/.env.local
+frontend/.env
+frontend/.env.local
+
+# Node.js
+node_modules/
+*/node_modules/
+
+# Next.js build output
+frontend/.next/
+frontend/out/
+
+# Python
+cv-service/__pycache__/
+cv-service/venv/
+cv-service/*.pyc
+cv-service/*.pyo
+
+# OS
+.DS_Store
+Thumbs.db

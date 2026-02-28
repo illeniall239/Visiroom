@@ -1,0 +1,424 @@
+# Visual Commerce AI - System Design Explanation
+
+This document explains the "what" and "why" behind the architectural choices made in this project. It is written in plain English to help you understand the core concepts of System Design.
+
+---
+
+## 1. The Monorepo Structure
+**What it is:** We placed all our projects (`frontend`, `api-gateway`, `cv-service`) into one giant folder (a monorepo) instead of three separate repositories.
+**Why we used it:** 
+- **Developer Experience:** It’s much easier to open one code editor window, search across all files, and run everything from one place. 
+- **System Design Concept:** When a system has multiple moving parts (Microservices), managing them in one place reduces the headache of syncing versions.
+
+---
+
+## 2. Next.js (The Frontend)
+**What it is:** A React framework that we are using to build the user interface (the web page where you upload photos).
+**Why we used it:**
+- **Speed & SEO:** Next.js is the industry standard for React apps because it loads incredibly fast. 
+- **Direct Uploads:** We designed the frontend to upload images *directly* to our storage bucket (Supabase) rather than sending them through our Node.js server first. 
+- **System Design Concept:** "Offloading the Gateway." By not making our Node server handle massive 10MB image uploads, we save server memory and prevent crashes during high traffic.
+
+---
+
+## 3. Node.js Express Server (The API Gateway)
+**What it is:** A lightweight backend server that acts as the "traffic cop" for our application. 
+**Why we used it:**
+- **Traffic Control:** It accepts requests from the frontend, checks if the user is allowed to make the request (Rate Limiting), and tells the other services what to do.
+- **WebSockets (Socket.io):** Standard HTTP requests are like sending a letter and waiting for a reply. WebSockets keep a permanent "phone line" open between the browser and the server. Because AI generation takes 5-10 seconds, we use WebSockets to push live progress updates (25%... 50%... 100%) back to the user without them needing to refresh the page.
+
+---
+
+## 4. Upstash Redis, ioredis, & BullMQ (The Job Queue)
+**What it is:** 
+- **Redis:** An extremely fast, in-memory database. We use Upstash to host it for free in the cloud.
+- **ioredis:** A robust Node.js client (library) used to connect to Redis.
+- **BullMQ:** A library that uses `ioredis` to create "To-Do lists" (Queues) inside Redis.
+**Why we used it (and why ioredis over REST):**
+- **The Problem:** If 100 users click "Generate", doing it all at once crashes the server. We need to queue the tasks.
+- **Why ioredis instead of a REST API?** A REST API (like `UPSTASH_REDIS_REST_URL`) is stateless. You ask for data, the server answers, and the connection drops. A job queue, however, needs a *persistent connection*. The background worker (BullMQ) needs to sit there and listen continuously: *"Is there a new job? Is there a new job now?"* `ioredis` creates a permanent, open socket connection (via a `rediss://` URL) allowing Redis to instantly push new jobs to our worker the millisecond they arrive, without the overhead of making thousands of HTTP requests.
+- **System Design Concept:** "Asynchronous Processing", "Decoupling", and "Persistent vs. Stateless Connections". Never make a user wait for a slow task on the main server thread. Put it in a queue. And always choose persistent sockets (like WebSockets or raw TCP/Redis sockets) for real-time, event-driven systems over stateless HTTP REST.
+
+---
+
+## 5. Supabase (Database & Object Storage)
+**What it is:** An open-source alternative to AWS or Firebase. It gives us a PostgreSQL database and a place to store files (Object Storage).
+**Why we used it:**
+- **Object Storage:** Databases are meant for text and numbers, not large files. We store the actual JPEG/PNG files in Supabase Storage buckets, which gives us a simple URL (e.g., `https://supabase.com/.../image.jpg`).
+- **PostgreSQL Database:** We save that URL, along with the user's ID and generation cost, into the SQL database. 
+- **System Design Concept:** "Separation of Concerns." Store files in Object Storage (cheap, built for files) and store data relationships in Relational Databases (fast, built for querying).
+
+---
+
+## 6. Python FastAPI (The Computer Vision Service)
+**What it is:** A separate backend server written in Python, dedicated entirely to analyzing the room (finding walls, floors, lighting).
+**Why we used it:**
+- **Ecosystem:** Python has the best libraries for AI and Machine Learning (PyTorch, TensorFlow). Node.js is terrible for heavy math.
+- **System Design Concept:** "Microservices Architecture." By splitting the heavy ML math into its own Python service, we can put it on a specialized, expensive computer (a GPU server) while keeping our Node.js API Gateway on a cheap, standard CPU server. If the Python server crashes because it ran out of memory, the Node.js server stays alive and can tell the user, "Sorry, AI is currently down," rather than the whole website going offline.
+
+---
+
+## 7. Rate Limiting (express-rate-limit)
+**What it is:** A middleware in our Node server that blocks a user's IP address if they make too many requests.
+**Why we used it:**
+- **Cost Protection:** AI APIs cost money per request (or exhaust free tier limits). If a malicious bot spammed our "Generate" button 10,000 times, it could drain our bank account or get us banned from the free tier. Rate limiting prevents this by capping users at (for example) 3 generations per day.
+- **System Design Concept:** "Defensive Architecture" and "Throttling." Always assume your APIs will be abused and put guardrails in place.
+
+---
+
+## 8. Puter.js (The Image Generation Model Pivot)
+**What it is:** A cloud operating system and API that provides access to dozens of top-tier AI models (including DALL-E 3, Stable Diffusion, and Google's Image models) directly from the frontend.
+**Why we pivoted to it:**
+- **The "User-Pays" Pricing Model:** We initially hit a 429 Rate Limit error on Google AI Studio because the developer API key was being exhausted. Puter.js solves this by forcing the *user* to authenticate. The user spends *their own* free daily allocation of credits to generate the image, meaning our application scales infinitely for $0.00.
+- **System Design Concept:** "Client-Side Execution" and "Decentralized Billing." Instead of our single server funneling all users through one developer API key (a single point of failure and a massive billing risk), we decentralize the workload. Every user's browser makes its own AI request using its own account. We traded a backend queue architecture for a highly scalable, zero-cost frontend architecture.
+
+---
+
+## 9. Architectural FAQs
+
+**Q: Why do I have to run the Frontend and the API Gateway separately?**
+- **Different Environments:** The frontend code (Next.js) is built to run inside the user's web browser (Chrome, Safari). The API Gateway (Node.js) is built to run safely on a secure server.
+- **Security:** The backend holds your secret API keys (Supabase, Upstash, Google AI). If you bundled the backend into the frontend, anyone could inspect the website code, steal your keys, and run up your bills.
+- **System Design Concept:** "Client-Server Architecture." The Client (Frontend) handles the visual UI, and the Server (Backend) handles the secure logic, databases, and secrets.
+
+**Q: But Python is also a backend, right? Why do we have *two* backends?**
+- **Yes, Python is a backend.** In our system, the Node.js API Gateway is the "front door" for users, and the Python CV Service is a specialized "back room" worker.
+- **Right Tool for the Job:** Node.js is incredible at handling thousands of simultaneous web requests, managing WebSockets, and talking to databases. However, it is terrible at heavy math. Python, on the other hand, is the industry standard for AI, Machine Learning, and Computer Vision (CV), but it isn't as fast as Node at handling massive amounts of simultaneous web traffic.
+- **System Design Concept:** "Microservices." Instead of forcing one language to do everything poorly, we split the backend into two specialized microservices. Node.js handles the web traffic and queues, and it privately asks Python to do the heavy AI math. If the Python server crashes from doing too much math, the Node.js server stays online to tell the user "AI is currently down" rather than the whole website going offline.
+
+**Q: But this just takes a picture of a room. How does it know what product to place in the room?**
+- **Composite AI Flow (The "Reference Box" Hack):** I updated the frontend to feature a "Dual Upload" flow. First, you upload a picture of the product. Second, you upload a picture of the room. When you click "Generate," the frontend draws a hidden HTML `<canvas>`, pasting the room image as the base and drawing the product image inside a white box in the bottom-right corner.
+- **Why do this?** We pass this single "composite image" to the AI along with a strict text prompt: *"Look at the reference product in the bottom right corner. Copy that exact product and place it naturally in the main room. Do not draw the reference box itself."* This forces single-image AI models (like Gemini) to accept *two* image contexts simultaneously (the room environment AND the exact product to insert).
+- **System Design Concept:** "Multi-modal Prompt Engineering" and "Client-Side Preprocessing." By merging user state (the uploaded product) with user context (the uploaded room) into a single visual hack on the client side, we bypass the AI model's limitation of only accepting one input image.
+
+---
+
+## 10. The Full BullMQ Pipeline (Repaired)
+
+**What was broken:** The original codebase had a "split-brain" architecture. The BullMQ/Socket.IO pipeline existed in the code but was completely bypassed — the frontend called the Next.js `/api/generate` route directly, which called Google AI synchronously and never touched the job queue. Socket.IO was connected but never received real events.
+
+**What we fixed and why it matters:**
+The system now runs the full designed pipeline end-to-end:
+1. **Frontend** creates the composite image (canvas), uploads it to Supabase Storage (direct upload — offloading the gateway), and sends only the `imageKey` + `socketId` to the Express gateway.
+2. **Gateway** validates the request, applies rate limiting, and enqueues a BullMQ job into Upstash Redis. It immediately returns `{ success: true }` to the frontend — the connection is freed instantly. This is the "fire and forget" pattern.
+3. **BullMQ Worker** (running in the same gateway container) picks up the job, emits real Socket.IO progress events at each step (25% → 50% → 75% → 90%), downloads the composite image from Supabase, and calls Google AI with both the image AND the prompt.
+4. **Frontend** UI updates in real-time driven entirely by Socket.IO events. The progress bar is no longer a fake animation tied to a fetch promise — it reflects actual worker execution steps.
+
+**System Design Concept:** "Decoupling Request Acceptance from Request Execution." The gateway's job is only to accept work and queue it — never to execute slow tasks on the request thread. The worker's job is only to execute work and emit results. This separation means the gateway can handle thousands of simultaneous requests without blocking, and the worker can retry failed jobs with exponential backoff without the user needing to re-submit.
+
+---
+
+## 11. Containerization with Docker
+
+**What it is:** Docker packages an application and all its dependencies (Node.js runtime, npm packages, Python, pip packages) into a self-contained image. This image runs identically on your laptop, in CI/CD, and in production.
+
+**Why we used it:**
+- **Environment Parity:** "It works on my machine" is eliminated. The Docker image IS the environment.
+- **Isolation:** Each service (frontend, gateway, cv-service) runs in its own container with its own dependencies. The Node.js version for the gateway doesn't conflict with the Python version for the CV service.
+- **Multi-stage Builds (Frontend):** The frontend Dockerfile has two stages — a `builder` stage that runs `npm ci` and `next build` (large, with all dev tools), and a lean `runner` stage that copies only the compiled `standalone` output. The final image is ~150MB instead of ~1GB.
+
+**System Design Concept:** "Immutable Infrastructure." Instead of SSH-ing into a server and running `git pull`, you build a new immutable image and swap it in. If the new version has a bug, you roll back by deploying the previous image (identified by its git commit SHA tag).
+
+---
+
+## 12. GCP Artifact Registry
+
+**What it is:** A private Docker image registry hosted on Google Cloud. After building a Docker image in CI/CD, you push it to Artifact Registry. Cloud Run then pulls from it when deploying.
+
+**Why we used it (over Docker Hub):**
+- **Private by default:** Images are not publicly accessible without IAM permission.
+- **Co-located with Cloud Run:** Images pulled from a registry in the same GCP region deploy faster (no cross-internet transfer).
+- **Versioned by commit SHA:** Every image is tagged with the git commit SHA that produced it (e.g., `frontend:a3f7b2c`). This gives you a complete audit trail — you can see exactly which code version is running in production at any time, and roll back to any previous version instantly.
+
+**System Design Concept:** "Immutable Artifact Versioning." Never overwrite a production artifact. Tag by commit SHA, not `latest`.
+
+---
+
+## 13. GCP Cloud Run
+
+**What it is:** A serverless container platform. You give it a Docker image; it runs it, handles HTTPS, scales automatically, and charges only for the time requests are actually being processed.
+
+**Why we used it:**
+- **No server management:** No VMs to patch, no Kubernetes clusters to configure.
+- **Automatic scaling:** If 100 users hit the frontend simultaneously, Cloud Run spins up more instances automatically. When traffic drops, it scales back to zero (no idle cost).
+- **WebSocket support:** Cloud Run supports persistent HTTP/2 and WebSocket connections — critical for the Socket.IO gateway. The gateway is deployed with `--min-instances 1` to ensure at least one container is always running, preventing cold-start latency from dropping active WebSocket connections.
+
+**System Design Concept:** "Serverless Containers." The best of both worlds — the control of containers with the operational simplicity of serverless. Contrast with: serverless functions (Lambda/Cloud Functions), which cannot hold persistent connections; or VMs, which require manual management and pay for idle time.
+
+---
+
+## 14. GCP Secret Manager
+
+**What it is:** A secure, centralized store for secrets (API keys, database passwords, connection strings). Cloud Run services are granted IAM permission to read specific secrets, which are injected as environment variables at container startup.
+
+**Why we used it:**
+- **Never in code:** Secrets are never in source code, Dockerfiles, or Docker images. If the image is accidentally made public, no secrets are exposed.
+- **Never in CI/CD environment variables:** GitHub Actions secrets (WIF credentials) never contain your actual API keys — only the permission to fetch them from Secret Manager at deploy time.
+- **Audit trail:** Every secret read is logged in Cloud Audit Logs. You can see exactly when and by which service a secret was accessed.
+- **Rotation without redeployment:** You can rotate a secret (e.g., regenerate a Google AI API key) by creating a new version in Secret Manager. Cloud Run picks up the new version on next container startup without any code or deployment changes.
+
+**System Design Concept:** "Principle of Least Privilege." Each Cloud Run service only has IAM access to the specific secrets it needs. The frontend can read `SUPABASE_ANON_KEY` but not `REDIS_URL`. The gateway can read `REDIS_URL` but not `GOOGLE_API_KEY` (frontend's key).
+
+---
+
+## 15. CI/CD with GitHub Actions + Workload Identity Federation
+
+**What it is:**
+- **GitHub Actions:** An automation platform that runs workflows (YAML files) triggered by git events. Every push to `main` triggers a workflow that builds Docker images and deploys to Cloud Run.
+- **Workload Identity Federation (WIF):** A keyless authentication mechanism. Instead of storing a long-lived GCP service account JSON key in GitHub secrets (a security risk — if GitHub is breached, the key is stolen), WIF lets GitHub Actions authenticate to GCP using a short-lived OIDC token.
+
+**Why this matters:**
+- **No long-lived credentials:** The OIDC token is valid for minutes, not years. It's cryptographically bound to a specific GitHub repository and branch — a token from `repo/attacker` cannot authenticate as `repo/your-project`.
+- **Automation:** Push to `main` → three parallel jobs build and deploy frontend, gateway, and cv-service simultaneously → production is updated in ~3 minutes. No manual SSH, no manual `docker push`, no forgetting to deploy one service.
+- **Traceability:** Every deployment is a GitHub Actions run with full logs, linked to the exact commit that triggered it.
+
+**System Design Concept:** "GitOps." The git repository is the single source of truth for both code AND infrastructure state. Whatever is in `main` is what runs in production — automatically, without human intervention.
+
+---
+
+## 16. Why Cloud Run Can Handle WebSockets (Important Nuance)
+
+Traditional serverless functions (AWS Lambda, Vercel Functions, Google Cloud Functions) are stateless and short-lived — they terminate after a single request/response cycle. Socket.IO requires a persistent, long-lived TCP connection, which makes these platforms incompatible.
+
+Cloud Run is different: it runs full containers, not functions. A container can hold open connections for as long as Cloud Run's maximum request timeout (up to 60 minutes). The key configurations:
+- `--timeout 3600`: Allows connections to stay open up to 1 hour
+- `--min-instances 1`: Ensures at least one container is always warm. Without this, Cloud Run can scale to zero, terminating all active WebSocket connections
+
+This is the reason we chose Cloud Run over simpler alternatives (Vercel for the backend, Cloud Functions) — those platforms cannot sustain the persistent connection that Socket.IO requires.
+
+---
+
+## 17. Fault-Tolerant Job Processing (Cold-Start Resilience)
+
+When deploying to a scale-to-zero platform like Cloud Run, three specific failure modes can silently corrupt the generation pipeline. Each one was identified and fixed independently. Understanding them teaches you how distributed systems actually fail in production.
+
+---
+
+### Failure Mode 1: Job Lock Expiry (Phantom Re-queue)
+
+**What happens:**
+BullMQ uses a Redis lock to claim ownership of a job. The default lock duration is 30 seconds. If the AI generation call takes longer than 30 seconds (which it frequently does), the lock expires while the job is still running. BullMQ sees an unlocked active job, assumes the worker died, and re-queues it. Now two workers are generating the same image simultaneously — a race condition that wastes AI quota and can produce inconsistent results.
+
+**The fix — `lockDuration: 90000`:**
+The worker is configured with a 90-second lock. BullMQ automatically renews this lock every 45 seconds (`lockDuration / 2`) while the job is actively running. The lock only expires if the worker genuinely dies and stops sending heartbeats. 90 seconds gives enough headroom for even the slowest AI responses, while still allowing clean re-queue if the container is actually killed.
+
+**System Design Concept:** "Heartbeat-based Liveness." Distributed systems cannot directly observe whether a worker is alive or just slow. A heartbeat (the lock renewal) is the standard pattern: if the heartbeat stops, assume dead and take action. The lock duration is your "assumed dead" threshold — too short and you get false positives (phantom re-queues), too long and you wait too long to recover from real failures.
+
+---
+
+### Failure Mode 2: Stale Socket ID After Reconnect
+
+**What happens:**
+When a generation job is enqueued, the client's Socket.IO ID is baked into the job data stored in Redis. If Cloud Run scales to zero mid-job and restarts, the Socket.IO connection drops. The client reconnects automatically and gets a **new** socket ID. When the worker eventually finishes the job and calls `io.to(socketId).emit(...)`, it emits to the old, now-dead socket ID. The event is silently dropped. The user's progress bar freezes forever even though the image was generated successfully.
+
+**The fix — `generationMap` + `rejoin` event:**
+
+Three components work together:
+
+1. **Gateway** maintains an in-memory `Map<generationId, socketId>` called `generationMap`. When a client emits `'rejoin'`, the gateway updates the entry with the new socket ID.
+
+2. **Worker** calls `getSocketId()` at emit time (not at job creation time). `getSocketId()` reads the current value from `generationMap`, falling back to the original socket ID from job data if no rejoin has occurred.
+
+3. **Frontend** stores the active `generationId` in a React ref (`activeGenerationIdRef`). Every time the Socket.IO `'connect'` event fires — whether first connect or reconnect — if a generation is in-flight, the client immediately emits `'rejoin'` with the stored `generationId`.
+
+The sequence on a cold-start drop looks like this:
+```
+[Container dies]
+Client: socket disconnects → Socket.IO client begins reconnect attempts
+[New container starts, triggered by next request]
+Client: socket reconnects → 'connect' fires
+Client: emits 'rejoin' { generationId: "abc-123" }
+Gateway: generationMap.set("abc-123", newSocketId)
+[Worker picks up stalled job from Redis]
+Worker: getSocketId() → reads "abc-123" from map → gets newSocketId
+Worker: io.to(newSocketId).emit('generation-complete', ...)
+Client: receives event ✓
+```
+
+**System Design Concept:** "Session Re-registration." Stateful real-time connections (WebSockets) sit on top of stateless TCP. Any network interruption ends the session. Robust real-time systems never assume a connection is permanent — they design a re-registration protocol so clients can rejoin their logical session on any new physical connection. This is the same pattern used by multiplayer game servers, live collaboration tools (like Google Docs), and financial data feeds.
+
+---
+
+### Failure Mode 3: Duplicate Key on Job Retry (Non-idempotent Write)
+
+**What happens:**
+The original worker used `supabase.insert()` to record the generation as pending at the start of the job. On retry, the same job runs again with the same `generationId`. The insert hits the primary key constraint (`id UUID PRIMARY KEY`) and throws a duplicate key error. The retry fails immediately — not because AI generation failed, but because a database write failed. The job is now stuck in a failure loop that has nothing to do with the actual work.
+
+**The fix — `upsert` instead of `insert`:**
+`supabase.upsert()` issues a PostgreSQL `INSERT ... ON CONFLICT DO UPDATE`. If the row doesn't exist, it creates it. If it already exists (on a retry), it updates the `status` back to `'pending'`. The operation is idempotent — running it 10 times produces the same result as running it once.
+
+**System Design Concept:** "Idempotency." Any operation that may be retried — due to network failure, worker crash, or explicit retry logic — must be safe to execute multiple times without changing the outcome. This is a foundational principle in distributed systems. HTTP PUT is idempotent, POST is not. `upsert` is idempotent, `insert` is not. When designing retry logic, always ask: "If this step runs twice, does it break anything?"
+
+---
+
+### Failure Mode 4: Premature Error Reporting During Retry Backoff
+
+**What happens:**
+If the worker throws an error on the first attempt, the naive approach is to immediately write `status: 'failed'` to Supabase and emit `generation-error` to the client. But BullMQ hasn't given up yet — it will retry the job after a backoff delay. The frontend sees `failed` in the database, the polling fallback surfaces an error screen, and the user gives up — even though BullMQ is about to successfully retry the job in 2 seconds.
+
+**The fix — check `job.attemptsMade` before marking failed:**
+```js
+if (job.attemptsMade >= job.opts.attempts) {
+  // This is the final attempt and it failed — mark permanently failed
+  await supabase.from('generations').update({ status: 'failed' })
+  io.to(currentSocketId).emit('generation-error', ...)
+}
+// Otherwise: throw silently → BullMQ schedules retry
+```
+During retry backoff, the Supabase row stays `pending`. The frontend's polling loop sees `pending` and keeps waiting. When BullMQ's retry succeeds, the row is updated to `completed` and the result is delivered. The user saw a slightly longer wait, not an error.
+
+**System Design Concept:** "Optimistic Retry." Never surface a transient failure to the user as a permanent error. A failure on attempt 1 of 3 is not a failure — it is a temporary condition. Only expose errors that are permanent (all retries exhausted). This is the same principle behind circuit breakers, retry-with-backoff patterns, and the distinction between 4xx (client error, don't retry) and 5xx (server error, safe to retry) HTTP status codes.
+
+---
+
+### Failure Mode 5: Lost Result with No Fallback (Socket.IO as Single Delivery Path)
+
+**What happens:**
+If all four failure modes above are somehow bypassed and the Socket.IO event is still lost (e.g., the client tab was backgrounded and the OS killed the WebSocket), the generation result exists in Google AI's response — but the user never sees it.
+
+**The fix — Supabase as persistent result store + polling fallback:**
+The worker always writes the final result to Supabase (`generated_image_url`, `status: 'completed'`) before emitting the Socket.IO event. The frontend starts a polling interval immediately after enqueuing the job, querying Supabase every 3 seconds. If Socket.IO delivers the result first, the polling interval is cleared. If Socket.IO never delivers, polling picks up the result from Supabase within 3 seconds of it being written.
+
+This creates a **dual-delivery system** with different reliability characteristics:
+- **Socket.IO** — low latency (~0ms), unreliable (connection-dependent)
+- **Supabase polling** — higher latency (0-3s), reliable (HTTP, stateless, always works)
+
+The two paths are complementary. Together they provide both speed and reliability.
+
+**System Design Concept:** "Defense in Depth" and "At-Least-Once Delivery." No single communication channel is perfectly reliable. Production systems layer multiple delivery mechanisms with different failure modes so that no single point of failure can prevent result delivery. This is the same pattern used in payment systems (webhook + polling fallback), email delivery (SMTP + delivery status API), and push notifications (WebSocket + REST polling).
+
+---
+
+### Summary: The Resilience Stack
+
+| Failure Mode | Root Cause | Fix | Concept |
+|---|---|---|---|
+| Lock expiry re-queue | `lockDuration` < AI call duration | `lockDuration: 90000`, auto-renew | Heartbeat-based liveness |
+| Stale socket after reconnect | Socket ID baked into job at creation | `generationMap` + `rejoin` re-registration | Session re-registration |
+| Duplicate key on retry | Non-idempotent `insert` | `upsert` (idempotent) | Idempotency |
+| False error during retry backoff | Error reported before all attempts exhausted | Check `job.attemptsMade >= job.opts.attempts` | Optimistic retry |
+| Lost result, no fallback | Single delivery path (Socket.IO) | Supabase write + polling fallback | At-least-once delivery |
+
+---
+
+## 18. Structured Logging with Pino
+
+**What it is:**
+Pino is a Node.js logging library that outputs structured JSON to stdout instead of plain text strings. Every log line is a valid JSON object with consistent fields: `level` (numeric severity), `time` (Unix timestamp), `msg` (the message), and any additional context fields you pass in.
+
+**Why not just use `console.log`?**
+In development, `console.log("Client connected: abc123")` is readable. In production on GCP Cloud Logging, it arrives as an unstructured blob of text — you cannot filter by socket ID, search for a specific generation, or aggregate error rates by type. You can only do full-text search, which is slow and imprecise.
+
+With Pino:
+```json
+{"level":30,"time":1234567890,"service":"api-gateway","generationId":"xyz","socketId":"abc","msg":"Client connected"}
+```
+GCP Cloud Logging automatically maps `level` to severity (30=INFO, 40=WARN, 50=ERROR), `time` to the log timestamp, and every other field becomes a queryable, filterable label. You can run queries like:
+
+```
+jsonPayload.generationId="xyz"          -- trace one full generation
+jsonPayload.level >= 50                  -- all errors only
+jsonPayload.service="ai"               -- only AI service logs
+```
+
+**Child loggers — automatic context propagation:**
+Instead of passing `generationId` manually to every log call, we create a child logger once at the start of a job:
+
+```js
+const jobLog = logger.child({ generationId, jobId: job.id });
+jobLog.info('Job started');           // includes generationId automatically
+jobLog.info({ progress: 25 }, '..'); // includes generationId + progress
+jobLog.error({ err }, 'Failed');      // includes generationId + full error
+```
+
+Every child log line automatically carries the parent's bound fields. This is called "contextual logging" and is how you trace a request or job through every step of its lifecycle without repeating yourself.
+
+**Development vs production — same code, different output:**
+```js
+transport: process.env.NODE_ENV !== 'production'
+  ? { target: 'pino-pretty', options: { colorize: true } }
+  : undefined
+```
+In development, `pino-pretty` transforms the JSON into human-readable coloured lines:
+```
+INFO [12:34:59] api-gateway: Job started   generationId=xyz jobId=42
+```
+In production, the same code outputs raw JSON that GCP Cloud Logging ingests and indexes. No `if (dev)` branches in your application code — just one env var controls the format.
+
+**LOG_LEVEL env var:**
+The `level` setting controls the minimum severity that gets written. `debug` logs everything including verbose AI prompt content. `info` (default) logs normal operations. `warn` and `error` log only problems. In production you'd typically set `LOG_LEVEL=info` to avoid verbose output. For debugging a specific issue, you can temporarily set `LOG_LEVEL=debug` without deploying new code.
+
+**System Design Concept:** "Observability." You cannot fix what you cannot see. Structured logging is the first pillar of observability (alongside metrics and tracing). The difference between `console.log` and structured JSON logging is the difference between writing a diary and building a searchable database.
+
+---
+
+## 19. Health Endpoints
+
+**What it is:**
+A `/health` HTTP endpoint that returns the current operational status of the service and its dependencies. The gateway's health endpoint pings Redis and runs a lightweight Supabase query, then responds with either HTTP 200 (healthy) or HTTP 503 (degraded).
+
+**Response format:**
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-02-28T12:00:00Z",
+  "uptime": 3600,
+  "services": {
+    "redis": "ok",
+    "supabase": "ok"
+  }
+}
+```
+
+If Redis is unreachable:
+```json
+{
+  "status": "degraded",
+  "services": { "redis": "error", "supabase": "ok" }
+}
+```
+
+**Why check dependencies, not just "is the process alive"?**
+A trivial health check — `app.get('/health', (req, res) => res.json({ status: 'ok' }))` — only tells you the Node.js process didn't crash. It tells you nothing about whether the application can actually do its job. If Redis is down, the gateway cannot enqueue jobs. If Supabase is down, the worker cannot persist results. The container is "alive" but functionally broken. A meaningful health check verifies that the service can actually serve requests end-to-end.
+
+**How Cloud Run uses it:**
+Cloud Run is configured with a startup probe and liveness probe pointing at `/health`. On startup, Cloud Run waits until `/health` returns 200 before routing traffic to the new container. During normal operation, it checks every 10 seconds — if a container returns 503 two or three times consecutively, Cloud Run marks it unhealthy, stops sending it traffic, and spins up a replacement. This means a degraded container is automatically removed from the pool without any manual intervention.
+
+**Liveness vs readiness (for future reference):**
+Production Kubernetes-style systems distinguish between two types of health checks:
+- **Liveness probe** (`/health`): "Is the process alive and not deadlocked?" If this fails, kill and restart the container.
+- **Readiness probe** (`/ready`): "Is the service ready to receive traffic?" If this fails, stop routing traffic but don't kill the container (e.g., during a warm-up period or while draining connections).
+
+Cloud Run uses a single health check that combines both concepts. For a more sophisticated setup (like GKE), you would expose both endpoints separately.
+
+**System Design Concept:** "Self-healing Infrastructure." Health endpoints are the interface between your application and the infrastructure layer. By exposing a meaningful health signal, you give the platform the information it needs to automatically route around failures — no on-call engineer needs to SSH in at 3am to restart a pod.
+
+---
+
+## 20. Distributed Rate Limiting with Redis
+
+**The problem with in-memory rate limiting:**
+`express-rate-limit` uses in-memory storage by default — each process keeps its own counter. This works correctly when only one server instance is running. But Cloud Run scales horizontally: under load it can spin up multiple container instances to handle traffic in parallel. Each instance has its own isolated memory, so each has its own separate counter.
+
+The result: a user who is limited to 3 generations per day can simply make 3 requests to instance A and 3 more requests to instance B — 6 total, bypassing the limit entirely. The rate limiter exists but silently does not work in a multi-instance environment.
+
+**The fix — shared Redis counter:**
+By configuring `express-rate-limit` to use a `RedisStore`, all instances share a single counter in Upstash Redis. When instance A increments the counter for IP `1.2.3.4`, instance B sees the same value. The limit is enforced globally across the entire fleet, regardless of how many containers are running.
+
+```
+Request from IP 1.2.3.4
+      │
+      ├──> Instance A: INCR ratelimit:1.2.3.4 → Redis returns 3
+      │    → limit hit, return 429
+      │
+      └──> Instance B: INCR ratelimit:1.2.3.4 → Redis returns 4
+           → limit hit, return 429  (not 1, because Redis is shared)
+```
+
+**How it works internally:**
+`rate-limit-redis` uses two Redis commands under the hood: `INCR` (increment a counter) and `EXPIRE` (set a TTL so the counter resets after the window). The `RedisStore` is configured with a `sendCommand` function that delegates to the existing ioredis connection — no new Redis connection is opened.
+
+**Why this matters beyond rate limiting:**
+Any state that must be consistent across multiple server instances cannot live in memory. This is a fundamental rule of stateless horizontal scaling. Other examples of the same problem: session tokens (use Redis or a database, not `req.session` in memory), WebSocket room membership (use Redis adapter for Socket.IO, not in-memory rooms), feature flags (use a shared store, not a config file). In each case, the fix is the same: move shared state out of process memory and into an external store that all instances can read and write.
+
+**System Design Concept:** "Stateless Services + Shared External State." The 12-Factor App methodology (the standard for cloud-native services) requires that application processes store no local state — any state that needs to outlive a request or be visible to other instances must live in an external backing service (database, cache, queue). This is what makes horizontal scaling possible: you can add or remove instances freely because none of them hold state that would be lost.
