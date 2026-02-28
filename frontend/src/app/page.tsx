@@ -8,10 +8,16 @@ import Progress from "../components/Progress";
 
 const API_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3001";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+let _supabase: ReturnType<typeof createClient> | null = null;
+const getSupabase = () => {
+  if (!_supabase) {
+    _supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    );
+  }
+  return _supabase;
+};
 
 export default function Home() {
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -125,7 +131,7 @@ export default function Home() {
       const blob = new Blob([bytes], { type: mimeType });
 
       const imageKey = `composites/${generationId}.jpg`;
-      const { error: uploadError } = await supabase.storage
+      const { error: uploadError } = await getSupabase().storage
         .from('visual-commerce')
         .upload(imageKey, blob, { contentType: mimeType, upsert: true });
 
@@ -170,7 +176,7 @@ export default function Home() {
           setErrorMsg("Generation timed out. Please try again.");
           return;
         }
-        const { data: row } = await supabase
+        const { data: row } = await getSupabase()
           .from('generations')
           .select('status, generated_image_url')
           .eq('id', generationId)

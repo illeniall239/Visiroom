@@ -14,5 +14,7 @@ COPY src/ ./src/
 
 EXPOSE 3001
 
+ENV NODE_ENV=production
+
 # Cloud Run injects PORT; the server already reads process.env.PORT || 3001
 CMD ["node", "src/index.js"]
