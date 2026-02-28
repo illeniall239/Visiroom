@@ -15,14 +15,8 @@ async function executeGeneration(prompt, imageUrl, options = {}) {
   const apiKey = process.env.GOOGLE_AI_STUDIO_API_KEY;
 
   if (!apiKey || apiKey === 'your-google-ai-studio-key') {
-    log.warn('GOOGLE_AI_STUDIO_API_KEY not set — returning mock image');
-    await new Promise(resolve => setTimeout(resolve, 2500));
-    return {
-      success: true,
-      result_url: "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80",
-      latency_ms: 2500,
-      cost: 0.00
-    };
+    log.error('GOOGLE_AI_STUDIO_API_KEY not set');
+    return { success: false, error: 'AI service is not configured. Please set GOOGLE_AI_STUDIO_API_KEY.' };
   }
 
   try {
@@ -56,13 +50,8 @@ async function executeGeneration(prompt, imageUrl, options = {}) {
     });
 
     if (response.status === 429) {
-      log.warn({ status: 429 }, 'Google AI rate limited — returning mock image');
-      return {
-        success: true,
-        result_url: "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80",
-        latency_ms: 2500,
-        cost: 0.00
-      };
+      log.warn({ status: 429 }, 'Google AI rate limited');
+      return { success: false, error: 'AI service is rate limited. Please wait a moment and try again.' };
     }
 
     if (!response.ok) {
@@ -74,21 +63,23 @@ async function executeGeneration(prompt, imageUrl, options = {}) {
     const data = await response.json();
     const latency = Date.now() - startTime;
 
-    let finalImageUrl = "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80";
-
-    if (data.candidates?.[0]?.content?.parts) {
-      const parts = data.candidates[0].content.parts;
-      const imagePart = parts.find(p => p.inlineData || p.inline_data);
-
-      if (imagePart) {
-        const inlineData = imagePart.inlineData || imagePart.inline_data;
-        finalImageUrl = `data:${inlineData.mimeType || 'image/png'};base64,${inlineData.data}`;
-        log.info({ latencyMs: latency }, 'Generation succeeded');
-      } else {
-        const textPart = parts.find(p => p.text);
-        log.warn({ text: textPart?.text?.substring(0, 200) }, 'Google AI returned text instead of image — using placeholder');
-      }
+    if (!data.candidates?.[0]?.content?.parts) {
+      log.error({ response: data }, 'Google AI returned no candidates');
+      return { success: false, error: 'AI service returned an unexpected response. Please try again.' };
     }
+
+    const parts = data.candidates[0].content.parts;
+    const imagePart = parts.find(p => p.inlineData || p.inline_data);
+
+    if (!imagePart) {
+      const textPart = parts.find(p => p.text);
+      log.error({ text: textPart?.text?.substring(0, 200) }, 'Google AI returned text instead of image');
+      return { success: false, error: 'AI service did not return an image. Please try again.' };
+    }
+
+    const inlineData = imagePart.inlineData || imagePart.inline_data;
+    const finalImageUrl = `data:${inlineData.mimeType || 'image/png'};base64,${inlineData.data}`;
+    log.info({ latencyMs: latency }, 'Generation succeeded');
 
     return {
       success: true,
