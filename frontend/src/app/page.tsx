@@ -177,13 +177,13 @@ export default function Home() {
           .single();
 
         if (row?.status === 'completed' && row.generated_image_url) {
-          clearInterval(pollInterval);
+          if (pollInterval) clearInterval(pollInterval);
           // Only update state if Socket.IO hasn't already delivered the result
           setResultUrl(prev => prev || row.generated_image_url);
           setStatus(prev => prev === 'completed' ? prev : 'completed');
           setProgress(100);
         } else if (row?.status === 'failed') {
-          clearInterval(pollInterval);
+          if (pollInterval) clearInterval(pollInterval);
           setStatus(prev => prev === 'error' ? prev : 'error');
           setErrorMsg("Generation failed. Please try again.");
         }
