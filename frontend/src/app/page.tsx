@@ -260,20 +260,27 @@ export default function Home() {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
           className="w-full px-4 md:px-8 relative z-10 mb-16 md:mb-32"
-          style={{ y: heroY, height: "18vw", minHeight: 80 }}
         >
-          <TextPressure
-            text="VISIROOM"
-            flex
-            alpha={false}
-            stroke={false}
-            width={false}
-            weight
-            italic={false}
-            textColor="#1a1a1a"
-            strokeColor="#a8c4ff"
-            minFontSize={36}
-          />
+          {/* Desktop: interactive variable font */}
+          <div className="hidden md:block" style={{ height: "18vw" }}>
+            <TextPressure
+              text="VISIROOM"
+              flex
+              alpha={false}
+              stroke={false}
+              width={false}
+              weight
+              italic={false}
+              textColor="#1a1a1a"
+              strokeColor="#a8c4ff"
+              minFontSize={36}
+            />
+          </div>
+
+          {/* Mobile: static bold fallback */}
+          <h1 className="md:hidden text-[14vw] font-display font-bold leading-none tracking-[-0.02em] uppercase text-center text-[#1a1a1a]">
+            VISIROOM
+          </h1>
         </motion.div>
 
         <motion.div
@@ -593,7 +600,7 @@ export default function Home() {
           </motion.div>
         </motion.div>
 
-        <div className="w-full flex items-center justify-center my-24 md:my-auto overflow-hidden">
+        <div className="w-full flex items-center justify-center my-24 md:my-auto">
           <motion.h2
             initial={{ opacity: 0, y: 60 }}
             whileInView={{ opacity: 1, y: 0 }}
