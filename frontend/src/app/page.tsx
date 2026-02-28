@@ -165,7 +165,7 @@ export default function Home() {
       pollIntervalRef.current = setInterval(async () => {
         const pollInterval = pollIntervalRef.current;
         if (Date.now() - started > maxWaitMs) {
-          clearInterval(pollInterval);
+          if (pollInterval) clearInterval(pollInterval);
           setStatus("error");
           setErrorMsg("Generation timed out. Please try again.");
           return;
