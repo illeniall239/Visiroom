@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import { motion, AnimatePresence, useScroll, useTransform } from "framer-motion";
 import Uploader from "../components/Uploader";
 import Progress from "../components/Progress";
+import TextPressure from "../components/TextPressure";
 
 const API_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:3001";
 
@@ -252,26 +253,34 @@ export default function Home() {
       </motion.nav>
 
       {/* Big Hero Text */}
-      <div className="flex-1 flex flex-col items-center justify-center p-8 relative z-10 min-h-[60vh]">
+      <div className="flex-1 flex flex-col items-center justify-center p-8 relative min-h-[60vh] overflow-hidden">
         <motion.div
           style={{ y: heroY }}
-          className="w-full max-w-7xl mx-auto flex flex-col items-center justify-center mb-16 md:mb-32 px-4 relative"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
+          className="w-full px-4 md:px-8 relative z-10 mb-16 md:mb-32"
+          style={{ y: heroY, height: "18vw", minHeight: 80 }}
         >
-          <motion.h1
-            initial={{ opacity: 0, scale: 0.92 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
-            className="text-[12vw] font-display font-bold leading-[0.8] tracking-[-0.02em] uppercase flex items-center justify-center gap-1 md:gap-3 w-full relative z-10"
-          >
-            VISIROOM
-          </motion.h1>
+          <TextPressure
+            text="VISIROOM"
+            flex
+            alpha={false}
+            stroke={false}
+            width={false}
+            weight
+            italic={false}
+            textColor="#1a1a1a"
+            strokeColor="#a8c4ff"
+            minFontSize={36}
+          />
         </motion.div>
 
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 0.6 }}
           transition={{ delay: 0.5, duration: 0.8 }}
-          className="w-full flex justify-between text-[10px] font-bold uppercase tracking-widest px-4 md:px-16"
+          className="w-full flex justify-between text-[10px] font-bold uppercase tracking-widest px-4 md:px-16 relative z-10"
         >
           <span className="hidden md:inline">How it work</span>
           <span>AI Generative</span>
