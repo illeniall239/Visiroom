@@ -42,7 +42,7 @@ app.use(pinoHttp({ logger }));
 // counter across all instances, making the limit consistent and correct.
 const apiLimiter = rateLimit({
   windowMs: 24 * 60 * 60 * 1000, // 24 hours
-  max: 3,
+  max: 20,
   message: { error: 'Too many requests from this IP, please try again tomorrow.' },
   standardHeaders: true,
   legacyHeaders: false,
