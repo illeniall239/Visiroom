@@ -77,7 +77,11 @@ jobs:
       - name: Build and push frontend image
         run: |
           IMAGE=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/frontend:${{ github.sha }}
-          docker build -t $IMAGE ./frontend
+          docker build \
+            --build-arg NEXT_PUBLIC_GATEWAY_URL=$(gcloud secrets versions access latest --secret=GATEWAY_URL --project=${{ env.PROJECT_ID }}) \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL=$(gcloud secrets versions access latest --secret=SUPABASE_URL --project=${{ env.PROJECT_ID }}) \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=$(gcloud secrets versions access latest --secret=SUPABASE_ANON_KEY --project=${{ env.PROJECT_ID }}) \
+            -t $IMAGE ./frontend
           docker push $IMAGE
 
       - name: Deploy frontend to Cloud Run
