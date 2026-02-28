@@ -43,22 +43,22 @@ describe('executeGeneration', () => {
     delete process.env.GOOGLE_AI_STUDIO_API_KEY;
   });
 
-  test('returns mock image and skips fetch when API key is not set', async () => {
+  test('returns success:false and skips fetch when API key is not set', async () => {
     const result = await executeGeneration(MOCK_PROMPT, MOCK_IMAGE_URL);
-    expect(result.success).toBe(true);
-    expect(result.result_url).toContain('unsplash');
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  test('returns success:true on 429 rate limit (graceful degradation, not failure)', async () => {
+  test('returns success:false on 429 rate limit', async () => {
     process.env.GOOGLE_AI_STUDIO_API_KEY = 'real-api-key';
     fetch
       .mockResolvedValueOnce(mockImageDownload()) // image download succeeds
       .mockResolvedValueOnce({ status: 429, ok: false }); // Google AI rate limits
 
     const result = await executeGeneration(MOCK_PROMPT, MOCK_IMAGE_URL);
-    expect(result.success).toBe(true);
-    expect(result.result_url).toContain('unsplash'); // falls back to placeholder
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/rate limited/i);
   });
 
   test('returns base64 data URL when Google AI returns an image part', async () => {
@@ -73,7 +73,7 @@ describe('executeGeneration', () => {
     expect(result.result_url).toBe(`data:image/png;base64,${fakeBase64}`);
   });
 
-  test('falls back to placeholder when Google AI returns text only (no image part)', async () => {
+  test('returns success:false when Google AI returns text only (no image part)', async () => {
     process.env.GOOGLE_AI_STUDIO_API_KEY = 'real-api-key';
     fetch
       .mockResolvedValueOnce(mockImageDownload())
@@ -86,8 +86,8 @@ describe('executeGeneration', () => {
       });
 
     const result = await executeGeneration(MOCK_PROMPT, MOCK_IMAGE_URL);
-    expect(result.success).toBe(true);
-    expect(result.result_url).toContain('unsplash'); // placeholder, not a base64 url
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
   });
 
   test('returns success:false when composite image download fails', async () => {
