@@ -422,3 +422,166 @@ Request from IP 1.2.3.4
 Any state that must be consistent across multiple server instances cannot live in memory. This is a fundamental rule of stateless horizontal scaling. Other examples of the same problem: session tokens (use Redis or a database, not `req.session` in memory), WebSocket room membership (use Redis adapter for Socket.IO, not in-memory rooms), feature flags (use a shared store, not a config file). In each case, the fix is the same: move shared state out of process memory and into an external store that all instances can read and write.
 
 **System Design Concept:** "Stateless Services + Shared External State." The 12-Factor App methodology (the standard for cloud-native services) requires that application processes store no local state — any state that needs to outlive a request or be visible to other instances must live in an external backing service (database, cache, queue). This is what makes horizontal scaling possible: you can add or remove instances freely because none of them hold state that would be lost.
+
+---
+
+## 21. Supabase Row Level Security (RLS)
+
+**What it is:**
+Row Level Security is a PostgreSQL feature that enforces access control at the database row level, not just the table level. When RLS is enabled on a table, every query — SELECT, INSERT, UPDATE, DELETE — is filtered through a policy. If no matching policy exists for the requesting role, the operation is denied.
+
+Supabase enables RLS by default on every table you create. This is intentional: it is secure by default, forcing you to explicitly grant access rather than accidentally exposing data.
+
+**The 406 problem:**
+When the frontend queries Supabase via the anon key with `.single()` and no matching RLS policy exists, PostgREST (Supabase's API layer) returns HTTP 406 Not Acceptable — not 403 Forbidden, as you might expect. This is a PostgREST-specific behavior: 406 means "I cannot return the format you requested" because RLS caused the result set to be empty, and `.single()` requires exactly one row.
+
+**Our policies:**
+```sql
+ALTER TABLE generations ENABLE ROW LEVEL SECURITY;
+
+-- Frontend reads job status
+CREATE POLICY "allow_read" ON generations FOR SELECT USING (true);
+
+-- Gateway inserts/updates job state (uses anon key, not service role key)
+CREATE POLICY "allow_insert" ON generations FOR INSERT WITH CHECK (true);
+CREATE POLICY "allow_update" ON generations FOR UPDATE USING (true);
+```
+
+`USING (true)` and `WITH CHECK (true)` mean "allow all rows for all requestors." This is appropriate here because the data is not user-sensitive (no PII, no private content — just generation status and result URLs). For a production system with user accounts, you would scope these policies to `auth.uid() = user_id` to ensure users can only read their own rows.
+
+**`.single()` vs `.maybeSingle()`:**
+The Supabase JS client's `.single()` tells PostgREST to return exactly one row and sets `Accept: application/vnd.pgrst.object+json`. If zero rows match (e.g., the worker hasn't written the row yet), PostgREST returns 406. `.maybeSingle()` returns `null` instead of erroring when no row exists — the correct choice for a polling loop that starts before the row is guaranteed to exist.
+
+**System Design Concept:** "Secure by Default." RLS embodies the principle of least privilege at the data layer. Instead of trusting application code to filter data correctly (which can be bypassed), security is enforced in the database itself. Even if an application bug constructs a query that should return all rows, RLS will still filter them by policy.
+
+---
+
+## 22. Build-Time vs Runtime Environment Variables in Next.js
+
+**The problem:**
+Next.js distinguishes between two categories of environment variables based on prefix:
+
+- **`NEXT_PUBLIC_*`** — baked into the JavaScript bundle at `npm run build`. Available in the browser. Cannot be changed after the build.
+- **Non-prefixed** — server-side only, available in API routes and server components. Injected at runtime.
+
+This distinction matters critically in a Docker + Cloud Run deployment. Cloud Run injects secrets as runtime environment variables. But when the container starts, Next.js is already compiled — the build happened during `docker build`, not at container startup. Any `NEXT_PUBLIC_*` variable that was not present during `docker build` will be `undefined` in the browser.
+
+**The fix — Docker build args:**
+```dockerfile
+ARG NEXT_PUBLIC_GATEWAY_URL
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
+...
+RUN npm run build
+```
+
+In CI/CD, GCP Secret Manager values are fetched and passed as `--build-arg` during `docker build`:
+```yaml
+docker build \
+  --build-arg NEXT_PUBLIC_GATEWAY_URL=$(gcloud secrets versions access latest --secret=GATEWAY_URL) \
+  --build-arg NEXT_PUBLIC_SUPABASE_URL=$(gcloud secrets versions access latest --secret=SUPABASE_URL) \
+  ...
+```
+
+**Security implication:**
+Because `NEXT_PUBLIC_*` variables are baked into the browser bundle, they are visible to anyone who inspects the JavaScript. Never use `NEXT_PUBLIC_` for secrets. Supabase's anon key is designed to be public (RLS enforces access control), and the gateway URL is a public endpoint — both are safe. The actual secret keys (Redis, Google AI) are server-side only and never prefixed with `NEXT_PUBLIC_`.
+
+**System Design Concept:** "Build Artifact Immutability vs Runtime Configuration." Build-time constants (public URLs, public keys) belong in the build. Runtime secrets (private API keys, database passwords) belong in the runtime environment. Confusing the two either exposes secrets or breaks deployments.
+
+---
+
+## 23. Testing Strategy — The Test Pyramid
+
+**What it is:**
+A layered approach to automated testing where the number of tests at each layer is inversely proportional to their cost and execution time.
+
+```
+          /‾‾‾‾‾‾‾‾‾‾\
+         /   E2E (2-3) \        ← Full browser, real network, slowest
+        /‾‾‾‾‾‾‾‾‾‾‾‾‾‾\
+       / Integration (10)\      ← Real HTTP against real Express routes
+      /‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\
+     /    Unit (20+)      \     ← One function, mocked deps, milliseconds
+```
+
+**Tools used:**
+| Layer | Tool | Reason |
+|---|---|---|
+| Backend unit + integration | **Jest + Supertest** | Jest is the Node.js standard; Supertest mounts Express in-process without a real port |
+| Frontend unit | **Vitest + React Testing Library** | Vitest is Jest-compatible but built for Vite/Next.js; RTL renders components in jsdom |
+
+**What was tested and why:**
+- **`generate.js` integration** — validates the 400/200/500 response paths including the Redis-down scenario (the most critical failure mode — enqueue failing silently)
+- **`upload.js` integration** — validates MIME type rejection and Supabase error propagation
+- **`ai.js` unit** — tests every code path: missing key, 429 rate limit, image response, text-only response, download failure
+- **`generationWorker.js` unit** — captures the BullMQ processor function by mocking the Worker constructor, then invokes it directly; tests the `generationMap` socket resolution, `upsert` vs `insert`, and `attemptsMade` gating
+
+**Tests as a regression safety net:**
+After changing `ai.js` to return errors instead of mock fallback images, three previously-passing tests immediately failed. This is the core value of tests — the behavior change was intentional, but without tests it could have silently broken other behaviors. The failing tests forced us to update the assertions to match the new contract, confirming the change was correct and complete.
+
+**CI integration:**
+The `test` job runs before all three deploy jobs in GitHub Actions. A failing test blocks the entire pipeline — no broken code can reach production because the Docker build step never runs.
+
+**System Design Concept:** "Shift-Left Testing." Finding a bug in a unit test costs seconds and zero dollars. Finding it in production costs user trust, data integrity, and possibly money (wasted AI API calls). Moving test failures as early in the pipeline as possible — ideally before a line of code is even committed — is called shifting left. The test pyramid defines where to invest testing effort to get the most signal for the lowest cost.
+
+---
+
+## 24. Reverse Proxy Trust and IP Forwarding
+
+**The problem:**
+Cloud Run sits behind Google's global load balancer. From the Node.js process's perspective, every request appears to come from the load balancer's internal IP address — not the real client IP. This breaks IP-based rate limiting: all requests appear to have the same source IP, so all users share one rate limit counter.
+
+The real client IP is forwarded in the `X-Forwarded-For` HTTP header by the load balancer:
+```
+X-Forwarded-For: 203.0.113.42, 10.128.0.5
+```
+The first value is the real client IP. The second is the load balancer's internal IP.
+
+**The fix — `trust proxy`:**
+```js
+app.set('trust proxy', 1);
+```
+
+This tells Express to trust exactly one hop of proxy headers. With this setting:
+- `req.ip` becomes the real client IP (from `X-Forwarded-For`)
+- `express-rate-limit` reads `req.ip` for its counter key
+- Rate limiting now works correctly per real user IP
+
+**Why `1` and not `true`?**
+`trust proxy: true` trusts the entire `X-Forwarded-For` chain unconditionally. A malicious client could send `X-Forwarded-For: 1.1.1.1` in their request, spoofing any IP they want and bypassing rate limits entirely. `trust proxy: 1` trusts only the last hop added by your infrastructure (which the client cannot control). Always set the minimum trust level required.
+
+**System Design Concept:** "Defense Against Header Spoofing." When your application sits behind a proxy, the security boundary shifts: your application trusts the proxy, and the proxy trusts the client. If you trust too much of the header chain, a client can manipulate the headers your application uses for security decisions. Always configure trust explicitly and minimally.
+
+---
+
+## 25. Error-First AI Design (No Silent Fallbacks)
+
+**The original approach — silent degradation:**
+The original `ai.js` returned a placeholder Unsplash sofa image in three scenarios:
+1. No API key configured
+2. Google AI returned HTTP 429 (rate limited)
+3. Google AI returned text instead of an image
+
+All three returned `{ success: true, result_url: "https://unsplash.com/..." }`. The user saw what appeared to be a successful generation — a real-looking room image — when in reality the AI was never called or failed silently.
+
+**Why this is harmful:**
+- **The user cannot distinguish a real result from a fake one.** They might share the result, thinking their room was actually processed, when they received a stock photo.
+- **Errors are invisible to the operator.** A 429 rate limit means the API key is exhausted — this is actionable. Silent fallback hides it completely. The logs show "success" while the system is broken.
+- **Testing becomes unreliable.** Unit tests that assert `success: true` for a 429 response are testing the wrong behavior.
+
+**The fix — explicit errors:**
+```js
+// No API key
+return { success: false, error: 'AI service is not configured.' };
+
+// 429
+return { success: false, error: 'AI service is rate limited. Please try again.' };
+
+// Text-only response
+return { success: false, error: 'AI service did not return an image. Please try again.' };
+```
+
+The worker propagates `success: false` as a job failure. The frontend shows the FAILED screen with the actual error message. The user knows something went wrong and can retry.
+
+**System Design Concept:** "Fail Fast and Fail Loudly." Silent failures are the most dangerous kind — they look like success while producing incorrect results. A system that fails loudly (surfaces errors immediately, with a clear message) is infinitely easier to debug and operate than one that degrades silently. This principle also applies to APIs: a 500 response is better than a 200 with a wrong body.
